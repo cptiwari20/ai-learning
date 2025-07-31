@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev:*)",
+      "Bash(npm run lint)",
+      "Bash(npm run build:*)",
+      "Bash(curl:*)",
+      "Bash(find:*)",
+      "Bash(rm:*)",
+      "WebFetch(domain:docs.excalidraw.com)",
+      "Bash(grep:*)",
+      "Bash(timeout 5 npm run dev)"
+    ],
+    "deny": []
+  }
+}

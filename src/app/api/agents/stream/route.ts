@@ -15,11 +15,12 @@ export async function POST(req: NextRequest) {
         // Run agent with streaming callback
         const agentMessages = await runAgent(sessionId, userText, async (toolName, toolArgs) => {
           if (toolName === "excalidraw_drawing" && enableDrawing) {
-            // Send drawing instruction to client
+            // Just send the tool args to client - don't execute the tool here
+            // The toolNode will handle the actual execution
             controller.enqueue(encoder.encode("data: " + JSON.stringify({ 
               type: "drawing", 
               tool: toolName, 
-              args: toolArgs 
+              args: toolArgs
             }) + "\n\n"));
           }
           return true; // Always confirm for now

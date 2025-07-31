@@ -148,9 +148,15 @@ export default function Home() {
     <div className="flex flex-col items-center min-h-screen p-8 bg-gray-50">
       <div className="w-full max-w-6xl bg-white rounded shadow p-4 flex flex-col gap-4">
         {/* Header with Drawing Toggle */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 border-b pb-4">
           <h1 className="text-2xl font-bold text-gray-800">Visual Learning AI</h1>
           <div className="flex items-center gap-4">
+            <a
+              href="/draw"
+              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+            >
+              Try New Drawing Page
+            </a>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"

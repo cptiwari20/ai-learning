@@ -9,7 +9,11 @@
       "Bash(rm:*)",
       "WebFetch(domain:docs.excalidraw.com)",
       "Bash(grep:*)",
-      "Bash(timeout 5 npm run dev)"
+      "Bash(timeout 5 npm run dev)",
+      "Bash(npm install)",
+      "Bash(timeout:*)",
+      "Bash(lsof:*)",
+      "Bash(node:*)"
     ],
     "deny": []
   }

@@ -2,6 +2,8 @@ import { ChatOpenAI } from "@langchain/openai";
 import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { excalidrawTool } from "./excalidrawTool";
+// Import broadcastDrawing dynamically to avoid circular dependency
+// import { broadcastDrawing } from "@/app/api/draw/ws/route";
 
 // Define the state structure
 const DrawingState = Annotation.Root({
@@ -196,6 +198,15 @@ export async function runDrawingAgent(
           try {
             const toolResult = JSON.parse(msg.content) as { success: boolean; elements?: unknown[]; message: string };
             if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
+              // Broadcast to WebSocket clients
+              console.log('🚀 Broadcasting drawing elements via WebSocket (non-streaming):', toolResult.elements.length);
+              try {
+                const { broadcastDrawing } = await import("@/app/api/draw/ws/route");
+                broadcastDrawing(toolResult.elements as any[], toolResult.message);
+              } catch (error) {
+                console.error('❌ Non-streaming WebSocket broadcast failed:', error);
+              }
+              
               onDrawingEvent(toolResult.elements, toolResult.message);
             }
           } catch (e) {
@@ -231,7 +242,8 @@ export async function streamDrawingAgent(
     const stream = await compiledGraph.stream(initialState);
 
     for await (const chunk of stream) {
-      console.log('Stream chunk:', Object.keys(chunk));
+      console.log('🌊 Stream chunk received:', Object.keys(chunk));
+      console.log('🌊 Chunk details:', JSON.stringify(chunk, null, 2));
 
       // Handle agent responses
       if (chunk.agent) {
@@ -245,11 +257,41 @@ export async function streamDrawingAgent(
 
       // Handle tool results
       if (chunk.tools) {
+        console.log('🔧 Processing tools chunk with', chunk.tools.messages.length, 'messages');
         const messages = chunk.tools.messages;
         for (const msg of messages) {
+          console.log('🔧 Processing message:', msg.constructor.name);
           if (msg instanceof ToolMessage) {
+            console.log('🔧 Found ToolMessage, processing...');
             try {
+              console.log('🔍 Parsing tool message content...');
               const toolResult = JSON.parse(msg.content) as { success: boolean; elements?: unknown[]; message: string };
+              console.log('🔍 Tool result:', { success: toolResult.success, elementsCount: toolResult.elements?.length || 0, message: toolResult.message });
+              
+              if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
+                // Broadcast to WebSocket clients
+                console.log('🚀 ATTEMPTING WebSocket broadcast with', toolResult.elements.length, 'elements');
+                console.log('🚀 Elements to broadcast:', JSON.stringify(toolResult.elements, null, 2));
+                
+                try {
+                  console.log('🚀 Dynamically importing broadcastDrawing function...');
+                  const { broadcastDrawing } = await import("@/app/api/draw/ws/route");
+                  console.log('🚀 Calling broadcastDrawing function...');
+                  broadcastDrawing(toolResult.elements as any[], toolResult.message);
+                  console.log('✅ WebSocket broadcast function call completed');
+                } catch (error) {
+                  console.error('❌ WebSocket broadcast failed with error:', error);
+                  console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+                }
+              } else {
+                console.log('⚠️ Not broadcasting - conditions not met:', {
+                  success: toolResult.success,
+                  hasElements: !!toolResult.elements,
+                  elementsLength: toolResult.elements?.length || 0
+                });
+              }
+              
+              // Always send the update regardless of broadcast success
               if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
                 onUpdate({
                   type: 'drawing',

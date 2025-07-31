@@ -13,13 +13,13 @@ importers:
         version: 0.18.0(@types/react-dom@19.1.7(@types/react@19.1.9))(@types/react@19.1.9)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@langchain/core':
         specifier: ^0.3.66
-        version: 0.3.66(openai@5.11.0(zod@3.25.76))
+        version: 0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76))
       '@langchain/langgraph':
         specifier: ^0.3.11
-        version: 0.3.12(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(zod-to-json-schema@3.24.6(zod@3.25.76))
+        version: 0.3.12(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(zod-to-json-schema@3.24.6(zod@3.25.76))
       '@langchain/openai':
         specifier: ^0.6.3
-        version: 0.6.3(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))
+        version: 0.6.3(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))(ws@8.18.3)
       next:
         specifier: 15.4.4
         version: 15.4.4(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(sass@1.51.0)
@@ -29,6 +29,9 @@ importers:
       react-dom:
         specifier: 19.1.0
         version: 19.1.0(react@19.1.0)
+      ws:
+        specifier: ^8.18.3
+        version: 8.18.3
     devDependencies:
       '@eslint/eslintrc':
         specifier: ^3
@@ -2839,6 +2842,18 @@ packages:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
     engines: {node: '>=0.10.0'}
 
+  ws@8.18.3:
+    resolution: {integrity: sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   yallist@5.0.0:
     resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
     engines: {node: '>=18'}
@@ -3134,14 +3149,14 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.4
 
-  '@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76))':
+  '@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76))':
     dependencies:
       '@cfworker/json-schema': 4.1.1
       ansi-styles: 5.2.0
       camelcase: 6.3.0
       decamelize: 1.2.0
       js-tiktoken: 1.0.20
-      langsmith: 0.3.50(openai@5.11.0(zod@3.25.76))
+      langsmith: 0.3.50(openai@5.11.0(ws@8.18.3)(zod@3.25.76))
       mustache: 4.2.0
       p-queue: 6.6.2
       p-retry: 4.6.2
@@ -3154,27 +3169,27 @@ snapshots:
       - '@opentelemetry/sdk-trace-base'
       - openai
 
-  '@langchain/langgraph-checkpoint@0.0.18(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))':
+  '@langchain/langgraph-checkpoint@0.0.18(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))':
     dependencies:
-      '@langchain/core': 0.3.66(openai@5.11.0(zod@3.25.76))
+      '@langchain/core': 0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76))
       uuid: 10.0.0
 
-  '@langchain/langgraph-sdk@0.0.105(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
+  '@langchain/langgraph-sdk@0.0.105(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)':
     dependencies:
       '@types/json-schema': 7.0.15
       p-queue: 6.6.2
       p-retry: 4.6.2
       uuid: 9.0.1
     optionalDependencies:
-      '@langchain/core': 0.3.66(openai@5.11.0(zod@3.25.76))
+      '@langchain/core': 0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76))
       react: 19.1.0
       react-dom: 19.1.0(react@19.1.0)
 
-  '@langchain/langgraph@0.3.12(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(zod-to-json-schema@3.24.6(zod@3.25.76))':
+  '@langchain/langgraph@0.3.12(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(zod-to-json-schema@3.24.6(zod@3.25.76))':
     dependencies:
-      '@langchain/core': 0.3.66(openai@5.11.0(zod@3.25.76))
-      '@langchain/langgraph-checkpoint': 0.0.18(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))
-      '@langchain/langgraph-sdk': 0.0.105(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      '@langchain/core': 0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76))
+      '@langchain/langgraph-checkpoint': 0.0.18(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))
+      '@langchain/langgraph-sdk': 0.0.105(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       uuid: 10.0.0
       zod: 3.25.76
     optionalDependencies:
@@ -3183,11 +3198,11 @@ snapshots:
       - react
       - react-dom
 
-  '@langchain/openai@0.6.3(@langchain/core@0.3.66(openai@5.11.0(zod@3.25.76)))':
+  '@langchain/openai@0.6.3(@langchain/core@0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76)))(ws@8.18.3)':
     dependencies:
-      '@langchain/core': 0.3.66(openai@5.11.0(zod@3.25.76))
+      '@langchain/core': 0.3.66(openai@5.11.0(ws@8.18.3)(zod@3.25.76))
       js-tiktoken: 1.0.20
-      openai: 5.11.0(zod@3.25.76)
+      openai: 5.11.0(ws@8.18.3)(zod@3.25.76)
       zod: 3.25.76
     transitivePeerDependencies:
       - ws
@@ -4962,7 +4977,7 @@ snapshots:
 
   kleur@4.1.5: {}
 
-  langsmith@0.3.50(openai@5.11.0(zod@3.25.76)):
+  langsmith@0.3.50(openai@5.11.0(ws@8.18.3)(zod@3.25.76)):
     dependencies:
       '@types/uuid': 10.0.0
       chalk: 4.1.2
@@ -4972,7 +4987,7 @@ snapshots:
       semver: 7.7.2
       uuid: 10.0.0
     optionalDependencies:
-      openai: 5.11.0(zod@3.25.76)
+      openai: 5.11.0(ws@8.18.3)(zod@3.25.76)
 
   language-subtag-registry@0.3.23: {}
 
@@ -5351,8 +5366,9 @@ snapshots:
 
   open-color@1.9.1: {}
 
-  openai@5.11.0(zod@3.25.76):
+  openai@5.11.0(ws@8.18.3)(zod@3.25.76):
     optionalDependencies:
+      ws: 8.18.3
       zod: 3.25.76
 
   optionator@0.9.4:
@@ -5980,6 +5996,8 @@ snapshots:
       isexe: 2.0.0
 
   word-wrap@1.2.5: {}
+
+  ws@8.18.3: {}
 
   yallist@5.0.0: {}
 

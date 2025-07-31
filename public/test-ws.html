@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+    <h1>WebSocket Connection Test</h1>
+    <div id="status">Disconnected</div>
+    <div id="messages"></div>
+    
+    <script>
+        const statusDiv = document.getElementById('status');
+        const messagesDiv = document.getElementById('messages');
+        
+        function log(message) {
+            console.log(message);
+            messagesDiv.innerHTML += '<div>' + new Date().toISOString() + ': ' + message + '</div>';
+        }
+        
+        try {
+            log('Attempting to connect to ws://localhost:8080...');
+            const ws = new WebSocket('ws://localhost:8080');
+            
+            ws.onopen = function(event) {
+                statusDiv.textContent = 'Connected';
+                statusDiv.style.color = 'green';
+                log('✅ WebSocket connection opened!');
+                log('ReadyState: ' + ws.readyState);
+                log('URL: ' + ws.url);
+            };
+            
+            ws.onmessage = function(event) {
+                log('📨 Message received: ' + event.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    log('📨 Parsed message: ' + JSON.stringify(data, null, 2));
+                } catch (e) {
+                    log('Failed to parse message as JSON');
+                }
+            };
+            
+            ws.onclose = function(event) {
+                statusDiv.textContent = 'Disconnected';
+                statusDiv.style.color = 'red';
+                log('🔌 WebSocket closed. Code: ' + event.code + ', Reason: ' + event.reason);
+            };
+            
+            ws.onerror = function(error) {
+                statusDiv.textContent = 'Error';
+                statusDiv.style.color = 'red';
+                log('❌ WebSocket error: ' + error);
+                log('❌ Error details: ' + JSON.stringify(error));
+            };
+            
+        } catch (error) {
+            log('❌ Failed to create WebSocket: ' + error);
+        }
+    </script>
+</body>
+</html>

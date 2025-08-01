@@ -7,14 +7,6 @@ function generateId(): string {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
-// Generate proper fractional index for ordering elements
-function generateFractionalIndex(index: number = 0): string {
-  const base = 'a';
-  const offset = String.fromCharCode(base.charCodeAt(0) + (index % 26));
-  const multiplier = Math.floor(index / 26);
-  return multiplier > 0 ? `${offset}${multiplier}` : offset;
-}
-
 // Create Excalidraw element with proper formatting
 function createExcalidrawElement(
   type: 'rectangle' | 'ellipse' | 'line' | 'text' | 'arrow' | 'diamond' | 'freedraw',
@@ -31,7 +23,6 @@ function createExcalidrawElement(
     points?: [number, number][];
     endX?: number;
     endY?: number;
-    index?: number;
     arrowhead?: 'arrow' | 'triangle' | 'dot' | null;
   } = {}
 ): ExcalidrawElement {
@@ -48,7 +39,6 @@ function createExcalidrawElement(
     points,
     endX,
     endY,
-    index = 0,
     arrowhead = null
   } = options;
 
@@ -81,7 +71,6 @@ function createExcalidrawElement(
     locked: false,
     groupIds: [] as string[],
     frameId: null,
-    index: generateFractionalIndex(index),
     customData: null
   };
 
@@ -193,8 +182,7 @@ function createFlowchartElements(options: {
       y: currentY,
       text: title,
       fontSize: 24,
-      strokeColor: '#1971c2',
-      index: elements.length
+      strokeColor: '#1971c2'
     }));
     currentY += 60;
   }
@@ -208,8 +196,7 @@ function createFlowchartElements(options: {
       width: 200,
       height: 80,
       backgroundColor: '#e3f2fd',
-      strokeColor: '#1971c2',
-      index: elements.length
+      strokeColor: '#1971c2'
     }));
     
     // Step text
@@ -218,8 +205,7 @@ function createFlowchartElements(options: {
       y: currentY + 25,
       text: step,
       fontSize: 16,
-      strokeColor: '#1971c2',
-      index: elements.length
+      strokeColor: '#1971c2'
     }));
     
     // Arrow to next step (except for last step)
@@ -230,8 +216,7 @@ function createFlowchartElements(options: {
         endX: startX + 100,
         endY: currentY + 120,
         strokeColor: '#1971c2',
-        arrowhead: 'arrow',
-        index: elements.length
+        arrowhead: 'arrow'
       }));
     }
     
@@ -258,8 +243,7 @@ function createMindMapElements(options: {
     height: 80,
     backgroundColor: '#fff3e0',
     strokeColor: '#f57c00',
-    strokeWidth: 3,
-    index: elements.length
+    strokeWidth: 3
   }));
   
   elements.push(createExcalidrawElement('text', {
@@ -267,8 +251,7 @@ function createMindMapElements(options: {
     y: centerY - 10,
     text: centralTopic,
     fontSize: 18,
-    strokeColor: '#f57c00',
-    index: elements.length
+    strokeColor: '#f57c00'
   }));
   
   // Branches
@@ -287,8 +270,7 @@ function createMindMapElements(options: {
       endX: branchX,
       endY: branchY,
       strokeColor: '#4caf50',
-      strokeWidth: 2,
-      index: elements.length
+      strokeWidth: 2
     }));
     
     // Branch node
@@ -298,8 +280,7 @@ function createMindMapElements(options: {
       width: 120,
       height: 50,
       backgroundColor: '#e8f5e8',
-      strokeColor: '#4caf50',
-      index: elements.length
+      strokeColor: '#4caf50'
     }));
     
     // Branch text
@@ -308,8 +289,7 @@ function createMindMapElements(options: {
       y: branchY - 8,
       text: branch,
       fontSize: 14,
-      strokeColor: '#2e7d32',
-      index: elements.length
+      strokeColor: '#2e7d32'
     }));
   });
   
@@ -440,19 +420,19 @@ export const excalidrawTool = tool(
           // Generic diagram creation - can be enhanced based on context
           const diagramElements = [
             createExcalidrawElement('rectangle', {
-              x, y, width: 150, height: 80, backgroundColor: '#e3f2fd', strokeColor: color, index: 0
+              x, y, width: 150, height: 80, backgroundColor: '#e3f2fd', strokeColor: color
             }),
             createExcalidrawElement('text', {
-              x: x + 10, y: y + 25, text: title || 'Component A', fontSize, strokeColor: color, index: 1
+              x: x + 10, y: y + 25, text: title || 'Component A', fontSize, strokeColor: color
             }),
             createExcalidrawElement('arrow', {
-              x: x + 150, y: y + 40, endX: x + 250, endY: y + 40, strokeColor: color, index: 2
+              x: x + 150, y: y + 40, endX: x + 250, endY: y + 40, strokeColor: color
             }),
             createExcalidrawElement('rectangle', {
-              x: x + 250, y, width: 150, height: 80, backgroundColor: '#fff3e0', strokeColor: color, index: 3
+              x: x + 250, y, width: 150, height: 80, backgroundColor: '#fff3e0', strokeColor: color
             }),
             createExcalidrawElement('text', {
-              x: x + 260, y: y + 25, text: 'Component B', fontSize, strokeColor: color, index: 4
+              x: x + 260, y: y + 25, text: 'Component B', fontSize, strokeColor: color
             })
           ];
           elements = diagramElements;

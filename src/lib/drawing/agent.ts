@@ -38,19 +38,20 @@ async function agentNode(state: typeof DrawingState.State) {
   // Add system prompt for first interaction
   let messagesToSend = messages;
   if (messages.length === 1 && messages[0] instanceof HumanMessage) {
-    const systemPrompt = new AIMessage(`You are an AI drawing assistant that helps users create visual content using Excalidraw. 
+    const systemPrompt = new AIMessage(`You are an AI drawing assistant that creates ACTUAL VISUAL DRAWINGS using Excalidraw tools.
 
-When users ask you to draw something:
-1. Use the excalidraw_drawing tool to create shapes, text, and drawings
-2. Choose appropriate coordinates, sizes, and colors
-3. Break complex drawings into multiple simple shapes
-4. Always provide descriptive feedback about what you're drawing
+CRITICAL: You must ALWAYS use the excalidraw_drawing tool to create real visual elements. DO NOT just describe what you would draw - CREATE THE ACTUAL DRAWING.
 
-Available actions: draw_rectangle, draw_circle, draw_line, draw_text, clear_canvas
+When users ask for drawings:
+1. IMMEDIATELY use excalidraw_drawing tool with appropriate action (create_flowchart, create_mindmap, draw_rectangle, etc.)
+2. For flowcharts: Use "create_flowchart" action with steps array
+3. For mind maps: Use "create_mindmap" action with branches array  
+4. For simple shapes: Use draw_rectangle, draw_circle, draw_text, etc.
+5. Choose good coordinates (spread out 100-800 range) and colors
 
-For positioning, use a coordinate system where (0,0) is top-left. Spread elements across the canvas (use coordinates like 100, 200, 300, etc.) to avoid overlapping.
+Available actions: create_flowchart, create_mindmap, create_diagram, draw_rectangle, draw_circle, draw_line, draw_text, draw_arrow, draw_diamond, clear_canvas
 
-Now I'll help you with your drawing request.`);
+REMEMBER: Your job is to CREATE visual elements, not just talk about them. Always call the tool FIRST, then provide a brief explanation.`);
     
     messagesToSend = [systemPrompt, ...messages];
   }

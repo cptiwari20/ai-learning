@@ -1,10 +1,6 @@
 'use client';
-import { useState, useRef, useCallback, useEffect } from 'react';
-import type { ExcalidrawImperativeAPI, ExcalidrawElement } from '@excalidraw/excalidraw/types/types';
-// import ExcalidrawCanvas from '@/components/ExcalidrawCanvas';
-
-import "@excalidraw/excalidraw/index.css";
-import { Excalidraw } from '@excalidraw/excalidraw';
+import { useState, useCallback } from 'react';
+import ExcalidrawWebSocketCanvas from '@/components/ExcalidrawWebSocketCanvas';
 
 interface ChatMessage {
   id: string;
@@ -13,326 +9,11 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-interface WSMessage {
-  type: 'drawing' | 'clear' | 'update' | 'sync' | 'connect' | 'disconnect';
-  elements?: ExcalidrawElement[];
-  message?: string;
-  clientId?: string;
-  timestamp?: number;
-}
-
 export default function DrawPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
-  const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawImperativeAPI | null>(null);
-  const pendingDrawingMessages = useRef<WSMessage[]>([]);
-  
-  // WebSocket state
-  const wsRef = useRef<WebSocket | null>(null);
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
-  const [clientId, setClientId] = useState<string>('');
-
-  // Set client-side rendering flag
-  
-
-  // Function to handle drawing messages - processes them if Excalidraw API is available, otherwise queues them
-  const handleDrawingMessage = useCallback((message: WSMessage) => {
-    console.log('🎨 Handling drawing message:', message.type);
-    console.log('🎨 Excalidraw API available:', !!excalidrawAPI);
-    
-    if (!excalidrawAPI) {
-      console.log('⏳ Excalidraw API not ready, queuing message');
-      pendingDrawingMessages.current.push(message);
-      return;
-    }
-    
-    switch (message.type) {
-      case 'sync':
-      case 'drawing':
-        if (message.elements) {
-           console.log('🎨 message.elements', message.elements);
-          console.log('🎨 Processing drawing elements:', message.elements.length);
-          
-          // Validate and clean elements for Excalidraw
-          const validElements = message.elements.filter(el => {
-            const isValid = el && el.id && el.type && typeof el.x === 'number' && typeof el.y === 'number';
-            if (!isValid) {
-              console.warn('❌ Invalid element filtered out:', el);
-            }
-            return isValid;
-          });
-          
-          if (validElements.length > 0) {
-            console.log('✅ Updating Excalidraw with', validElements.length, 'valid elements');
-            
-            try {
-              // Replace all elements with new drawing from backend using API
-              excalidrawAPI.updateScene({ 
-                elements: validElements,
-                appState: {
-                  viewBackgroundColor: '#ffffff'
-                }
-              });
-              console.log('✅ Excalidraw scene updated successfully via API');
-              
-              // Auto-fit the view to show all elements
-              setTimeout(() => {
-                if (excalidrawAPI && validElements.length > 0) {
-                  try {
-                    excalidrawAPI.scrollToContent(validElements, {
-                      fitToContent: true,
-                      animate: true
-                    });
-                    console.log('📐 Auto-fitted view to content via API');
-                  } catch (error) {
-                    console.warn('Failed to auto-fit view:', error);
-                  }
-                }
-              }, 1000);
-            } catch (error) {
-              console.error('❌ Failed to update Excalidraw scene:', error);
-            }
-          }
-        }
-        
-        if (message.message) {
-          setMessages(prev => [...prev, {
-            id: Math.random().toString(36).substring(2, 15),
-            type: 'assistant' as const,
-            content: `🎨 ${message.message}`,
-            timestamp: new Date()
-          }]);
-        }
-        break;
-        
-      case 'update':
-        if (message.elements && excalidrawAPI) {
-          console.log('➕ Adding elements to existing drawing');
-          const currentElements = excalidrawAPI.getSceneElements();
-          const validNewElements = message.elements.filter(el => 
-            el && el.id && el.type && typeof el.x === 'number' && typeof el.y === 'number'
-          );
-          const newElements = [...currentElements, ...validNewElements];
-          
-          excalidrawAPI.updateScene({ 
-            elements: newElements,
-            appState: {
-              viewBackgroundColor: '#ffffff'
-            }
-          });
-          
-          if (message.message) {
-            setMessages(prev => [...prev, {
-              id: Math.random().toString(36).substring(2, 15),
-              type: 'assistant' as const,
-              content: `🎨 ${message.message}`,
-              timestamp: new Date()
-            }]);
-          }
-        }
-        break;
-        
-      case 'clear':
-        if (excalidrawAPI) {
-          console.log('🧹 Clearing canvas');
-          excalidrawAPI.updateScene({ elements: [] });
-          if (message.message) {
-            setMessages(prev => [...prev, {
-              id: Math.random().toString(36).substring(2, 15),
-              type: 'assistant' as const,
-              content: `🧹 ${message.message}`,
-              timestamp: new Date()
-            }]);
-          }
-        }
-        break;
-    }
-  }, [excalidrawAPI]);
-
-  // Process pending messages when Excalidraw API becomes available
-  useEffect(() => {
-    if (excalidrawAPI && pendingDrawingMessages.current.length > 0) {
-      console.log('🚀 Processing', pendingDrawingMessages.current.length, 'pending drawing messages via API');
-      const messages = [...pendingDrawingMessages.current];
-      pendingDrawingMessages.current = [];
-      
-      messages.forEach(message => handleDrawingMessage(message));
-    }
-  }, [excalidrawAPI, handleDrawingMessage]);
-
-  // Initialize WebSocket connection - run only once
-  useEffect(() => {
-    console.log('🚀 Initializing WebSocket connection...');
-    
-    const connectWebSocket = async () => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        console.log('⚠️ WebSocket already connected, skipping');
-        return;
-      }
-      
-      // Close existing connection if any
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      
-      setWsStatus('connecting');
-      
-      try {
-        // First, ensure the WebSocket server is initialized by calling the API
-        console.log('🔧 Initializing WebSocket server...');
-        try {
-          const initResponse = await fetch('/api/draw/ws');
-          const initResult = await initResponse.json();
-          console.log('📡 WebSocket server status:', initResult);
-        } catch (error) {
-          console.warn('⚠️ Failed to initialize WebSocket server:', error);
-        }
-        
-        // Wait a moment for server to initialize
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Try multiple WebSocket connection strategies
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        
-        // Use standalone WebSocket server on port 8080
-        const wsUrl = `${protocol}//localhost:8080`;
-        
-        // Alternative same-origin connection (doesn't work with Next.js API routes)
-        // const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-        
-        console.log('🔌 Creating WebSocket connection to', wsUrl);
-        console.log('Current page details:', {
-          protocol: window.location.protocol,
-          host: window.location.host,
-          hostname: window.location.hostname,
-          port: window.location.port,
-          origin: window.location.origin
-        });
-        
-        // Test if WebSocket is supported
-        if (typeof WebSocket === 'undefined') {
-          console.error('❌ WebSocket not supported in this browser');
-          setWsStatus('error');
-          return;
-        }
-        
-        console.log('✅ WebSocket is supported, attempting connection...');
-        
-        wsRef.current = new WebSocket(wsUrl);
-        
-        // Set a timeout for connection
-        const connectionTimeout = setTimeout(() => {
-          if (wsRef.current?.readyState === WebSocket.CONNECTING) {
-            console.log('⏰ WebSocket connection timeout');
-            wsRef.current.close();
-            setWsStatus('error');
-          }
-        }, 5000); // 5 second timeout
-        
-        wsRef.current.onopen = () => {
-          clearTimeout(connectionTimeout);
-          setWsStatus('connected');
-          console.log('✅ Connected to Excalidraw WebSocket');
-        };
-        
-        wsRef.current.onmessage = (event) => {
-          try {
-            const message: WSMessage = JSON.parse(event.data);
-            console.log('📨 Raw WebSocket message received:', message);
-            console.log('📨 Message type:', message.type);
-            console.log('📨 Elements count:', message.elements?.length || 0);
-            
-            // Handle message using the new handleDrawingMessage function
-            switch (message.type) {
-              case 'connect':
-                if (message.clientId) {
-                  setClientId(message.clientId);
-                  console.log('🔗 Connected with client ID:', message.clientId);
-                }
-                break;
-                
-              case 'sync':
-              case 'drawing':
-                handleDrawingMessage(message);
-                break;
-              case 'update':
-                handleDrawingMessage(message);
-                break;
-              case 'clear':
-                handleDrawingMessage(message);
-                break;
-                
-              case 'disconnect':
-                console.log('👋 Client disconnected:', message.clientId);
-                break;
-                
-              default:
-                console.log('❓ Unknown message type:', message.type);
-            }
-          } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
-          }
-        };
-        
-        wsRef.current.onclose = (event) => {
-          console.log('🔌 WebSocket closed:', event.code, event.reason);
-          console.log('Close event details:', {
-            code: event.code,
-            reason: event.reason,
-            wasClean: event.wasClean,
-            type: event.type
-          });
-          setWsStatus('disconnected');
-          
-          // Only attempt to reconnect if it wasn't a clean close
-          if (event.code !== 1000) {
-            console.log('🔄 Attempting to reconnect in 3 seconds...');
-            setTimeout(() => {
-              connectWebSocket();
-            }, 3000);
-          }
-        };
-        
-        wsRef.current.onerror = (error) => {
-          setWsStatus('error');
-          console.error('❌ WebSocket error:', error);
-          console.error('WebSocket error details:', {
-            readyState: wsRef.current?.readyState,
-            url: wsRef.current?.url,
-            error: error,
-            errorType: typeof error,
-            errorMessage: error.message || 'No error message'
-          });
-          
-          // Try to get more detailed error info
-          if (wsRef.current) {
-            console.error('WebSocket state details:', {
-              readyState: wsRef.current.readyState,
-              url: wsRef.current.url,
-              protocol: wsRef.current.protocol,
-              extensions: wsRef.current.extensions
-            });
-          }
-        };
-        
-      } catch (error) {
-        setWsStatus('error');
-        console.error('❌ Failed to connect to WebSocket:', error);
-      }
-    };
-    
-    // Initial connection
-    connectWebSocket();
-    
-    return () => {
-      if (wsRef.current) {
-        console.log('🔌 Cleaning up WebSocket connection');
-        wsRef.current.close(1000, 'Component unmounting'); // Clean close
-      }
-    };
-  }, [handleDrawingMessage]); // Include handleDrawingMessage dependency
 
   const addMessage = useCallback((type: 'user' | 'assistant', content: string) => {
     const newMessage: ChatMessage = {
@@ -343,6 +24,10 @@ export default function DrawPage() {
     };
     setMessages(prev => [...prev, newMessage]);
   }, []);
+
+  const handleDrawingMessage = useCallback((message: string) => {
+    addMessage('assistant', message);
+  }, [addMessage]);
 
   const handleSendMessage = useCallback(async () => {
     if (!inputValue.trim() || isLoading) return;
@@ -387,7 +72,6 @@ export default function DrawPage() {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-              console.log({data})
               
               if (data.type === 'message' && data.content) {
                 assistantMessage += data.content;
@@ -409,54 +93,6 @@ export default function DrawPage() {
                   }
                 });
               } else if (data.type === 'drawing' && data.elements) {
-                // if (data.elements && excalidrawRef.current) {
-                //   console.log('🎨 Processing drawing elements:', data.elements.length);
-                  
-                //   // Validate and clean elements for Excalidraw
-                //   const validElements = data.elements.filter(el => {
-                //     const isValid = el && el.id && el.type && typeof el.x === 'number' && typeof el.y === 'number';
-                //     if (!isValid) {
-                //       console.warn('❌ Invalid element filtered out:', el);
-                //     }
-                //     return isValid;
-                //   });
-                  
-                //   if (validElements.length > 0) {
-                //     console.log('✅ Updating Excalidraw with', validElements.length, 'valid elements');
-                    
-                //     // Replace all elements with new drawing from backend
-                //     excalidrawRef.current.updateScene({ 
-                //       elements: validElements,
-                //       appState: {
-                //         viewBackgroundColor: '#ffffff'
-                //       }
-                //     });
-                    
-                //     // Auto-fit the view to show all elements
-                //     setTimeout(() => {
-                //       if (excalidrawRef.current && validElements.length > 0) {
-                //         try {
-                //           excalidrawRef.current.scrollToContent(validElements, {
-                //             fitToContent: true,
-                //             animate: true
-                //           });
-                //           console.log('📐 Auto-fitted view to content');
-                //         } catch (error) {
-                //           console.warn('Failed to auto-fit view:', error);
-                //         }
-                //       }
-                //     }, 500);
-                //   }
-                  
-                //   if (data.message) {
-                //     setMessages(prev => [...prev, {
-                //       id: Math.random().toString(36).substring(2, 15),
-                //       type: 'assistant' as const,
-                //       content: `🎨 ${data.message}`,
-                //       timestamp: new Date()
-                //     }]);
-                //   }
-                // }
                 // Drawing handled via WebSocket, just add message to chat
                 if (data.message) {
                   assistantMessage += '\n🎨 ' + data.message;
@@ -509,33 +145,6 @@ export default function DrawPage() {
           <h2 className="text-lg font-semibold text-gray-800">Drawing Assistant</h2>
           <p className="text-sm text-gray-600">Ask me to draw shapes, diagrams, or illustrations!</p>
           
-          {/* WebSocket Status */}
-          <div className="mt-2 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${
-                wsStatus === 'connected' ? 'bg-green-500' : 
-                wsStatus === 'connecting' ? 'bg-yellow-500' : 
-                wsStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
-              }`}></div>
-              <span className="text-gray-500">
-                Real-time: {wsStatus}
-                {clientId && ` (${clientId.substring(0, 8)}...)`}
-              </span>
-            </div>
-            
-            {(wsStatus === 'disconnected' || wsStatus === 'error') && (
-              <button
-                onClick={() => {
-                  console.log('🔄 Manual reconnect triggered');
-                  // Force reconnection by reloading the page or triggering reconnect
-                  window.location.reload();
-                }}
-                className="px-2 py-1 bg-blue-100 text-blue-600 rounded text-xs hover:bg-blue-200"
-              >
-                🔄 Reconnect
-              </button>
-            )}
-          </div>
           <div className="mt-3 text-xs text-gray-500">
             <p className="font-medium mb-1">Try these commands:</p>
             <ul className="space-y-1 text-xs">
@@ -614,151 +223,11 @@ export default function DrawPage() {
       
       {/* Drawing Panel */}
       <div className="flex-1 flex flex-col">
-        <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+        <div className="p-4 border-b border-gray-200">
           <h1 className="text-xl font-semibold text-gray-800">Interactive Drawing Canvas</h1>
-          <div className="flex gap-2">
-            <button
-              onClick={async () => {
-                // Clear via WebSocket API so all clients get updated
-                try {
-                  await fetch('/api/draw/ws', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      action: 'clear',
-                      message: 'Canvas cleared by user'
-                    })
-                  });
-                } catch (error) {
-                  console.error('Failed to clear canvas:', error);
-                  // Fallback to local clear
-                  if (excalidrawAPI) {
-                    excalidrawAPI.updateScene({ elements: [] });
-                    addMessage('assistant', '🧹 Canvas cleared locally!');
-                  }
-                }
-              }}
-              className="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm"
-            >
-              🧹 Clear Canvas
-            </button>
-            
-            <button
-              onClick={() => {
-                // Test adding elements directly to Excalidraw
-                if (excalidrawAPI) {
-                  const testElement = {
-                    id: `test-${Date.now()}`,
-                    type: 'rectangle' as const,
-                    x: Math.random() * 300 + 50,
-                    y: Math.random() * 200 + 50,
-                    width: 100,
-                    height: 80,
-                    strokeColor: '#00ff00',
-                    backgroundColor: 'transparent',
-                    fillStyle: 'solid' as const,
-                    strokeWidth: 2,
-                    strokeStyle: 'solid' as const,
-                    roughness: 1,
-                    opacity: 100,
-                    angle: 0,
-                    seed: Math.floor(Math.random() * 1000000),
-                    version: 1,
-                    versionNonce: Math.floor(Math.random() * 1000000),
-                    isDeleted: false,
-                    boundElements: null,
-                    updated: Date.now(),
-                    link: null,
-                    locked: false,
-                    groupIds: [],
-                    frameId: null,
-                    index: 'test',
-                    customData: null,
-                    roundness: null
-                  };
-                  
-                  const currentElements = excalidrawAPI.getSceneElements();
-                  excalidrawAPI.updateScene({ 
-                    elements: [...currentElements, testElement]
-                  });
-                  
-                  console.log('🧪 Added test element directly to Excalidraw');
-                  addMessage('assistant', '🧪 Added test rectangle directly to canvas');
-                }
-              }}
-              className="px-3 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 text-sm"
-            >
-              🧪 Test Element
-            </button>
-            
-            <button
-              onClick={async () => {
-                // Test WebSocket broadcast
-                try {
-                  const response = await fetch('/api/draw/ws', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      action: 'broadcast',
-                      elements: [{
-                        id: `ws-test-${Date.now()}`,
-                        type: 'ellipse',
-                        x: Math.random() * 300 + 100,
-                        y: Math.random() * 200 + 100,
-                        width: 120,
-                        height: 120,
-                        strokeColor: '#0066ff',
-                        backgroundColor: '#e6f3ff'
-                      }],
-                      message: 'WebSocket test element'
-                    })
-                  });
-                  
-                  const result = await response.json();
-                  console.log('📡 WebSocket test result:', result);
-                  
-                  if (result.success) {
-                    addMessage('assistant', '📡 Sent test element via WebSocket');
-                  } else {
-                    addMessage('assistant', '❌ WebSocket test failed');
-                  }
-                } catch (error) {
-                  console.error('WebSocket test error:', error);
-                  addMessage('assistant', '❌ WebSocket test error');
-                }
-              }}
-              className="px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-sm"
-            >
-              📡 Test WebSocket
-            </button>
-            
-            {/* <a
-              href="/"
-              className="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm"
-            >
-              💬 Chat Only
-            </a> */}
-          </div>
         </div>
         <div className="flex-1">
-          <Excalidraw excalidrawAPI={(api: ExcalidrawImperativeAPI) => setExcalidrawAPI(api)} />
-          {/* <ExcalidrawCanvas
-            initialData={{
-              elements: [],
-              appState: {
-                viewBackgroundColor: '#ffffff'
-              }
-            }}
-            onMount={(api, initialData) => {
-              console.log('🎯 Excalidraw onMount called from DrawPage!');
-              console.log('🎯 ExcalidrawAPI received:', !!api);
-              console.log('🎯 API methods:', api ? Object.keys(api) : []);
-              
-              // Store the API in state for reliable access
-              setExcalidrawAPI(api);
-              console.log('✅ Excalidraw API stored in state and ready!');
-            }}
-          /> */}
+          <ExcalidrawWebSocketCanvas onMessage={handleDrawingMessage} />
         </div>
       </div>
     </div>

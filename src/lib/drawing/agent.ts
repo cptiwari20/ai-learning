@@ -16,6 +16,12 @@ const DrawingState = Annotation.Root({
   iterations: Annotation<number>({
     reducer: (x, _y) => (x || 0) + 1,
   }),
+  currentElements: Annotation<unknown[]>({
+    reducer: (x, y) => y || x || [],
+  }),
+  conversationContext: Annotation<string>({
+    reducer: (x, y) => y || x || '',
+  }),
 });
 
 // Initialize the model with tools
@@ -35,23 +41,37 @@ async function agentNode(state: typeof DrawingState.State) {
   console.log(`Last message type: ${lastMessage?.constructor.name}`);
   console.log(`Total messages: ${messages.length}`);
 
-  // Add system prompt for first interaction
+  // Enhanced system prompt with context awareness
   let messagesToSend = messages;
   if (messages.length === 1 && messages[0] instanceof HumanMessage) {
+    const currentElementsCount = state.currentElements?.length || 0;
+    const conversationSummary = state.conversationContext || '';
+    
     const systemPrompt = new AIMessage(`You are an AI drawing assistant that creates ACTUAL VISUAL DRAWINGS using Excalidraw tools.
 
-CRITICAL: You must ALWAYS use the excalidraw_drawing tool to create real visual elements. DO NOT just describe what you would draw - CREATE THE ACTUAL DRAWING.
+CRITICAL RULES:
+- NEVER provide explanatory text or descriptions
+- NEVER mention Excalidraw links or external URLs
+- ONLY call the excalidraw_drawing tool to create visual elements
+- DO NOT say what you will draw - JUST DRAW IT
+- Respond ONLY with tool calls, no additional text
 
-When users ask for drawings:
-1. IMMEDIATELY use excalidraw_drawing tool with appropriate action (create_flowchart, create_mindmap, draw_rectangle, etc.)
-2. For flowcharts: Use "create_flowchart" action with steps array
-3. For mind maps: Use "create_mindmap" action with branches array  
-4. For simple shapes: Use draw_rectangle, draw_circle, draw_text, etc.
-5. Choose good coordinates (spread out 100-800 range) and colors
+CONTEXT AWARENESS:
+- Current canvas has ${currentElementsCount} elements
+- Previous conversation context: ${conversationSummary}
+- When adding new elements, consider existing drawings and build upon them
+- For iterative requests, add to existing content rather than replacing it
+
+ACTIONS TO USE:
+- For flowcharts: create_flowchart with steps array
+- For mind maps: create_mindmap with branches array  
+- For simple shapes: draw_rectangle, draw_circle, draw_text, etc.
+- Position new elements to complement existing ones (avoid overlap)
+- Use consistent colors and styling with existing elements
 
 Available actions: create_flowchart, create_mindmap, create_diagram, draw_rectangle, draw_circle, draw_line, draw_text, draw_arrow, draw_diamond, clear_canvas
 
-REMEMBER: Your job is to CREATE visual elements, not just talk about them. Always call the tool FIRST, then provide a brief explanation.`);
+RESPOND ONLY WITH TOOL CALLS - NO TEXT RESPONSES.`);
     
     messagesToSend = [systemPrompt, ...messages];
   }
@@ -60,6 +80,11 @@ REMEMBER: Your job is to CREATE visual elements, not just talk about them. Alway
     const response = await model.invoke(messagesToSend);
     console.log(`Model response type: ${response.constructor.name}`);
     console.log(`Has tool calls: ${(response as AIMessage & { tool_calls?: unknown[] }).tool_calls?.length || 0}`);
+    
+    // If response has tool calls, clear any text content to ensure only drawing actions
+    if (response instanceof AIMessage && response.tool_calls && response.tool_calls.length > 0) {
+      response.content = ''; // Remove any explanatory text
+    }
     
     return {
       messages: [response],
@@ -173,6 +198,13 @@ const graph = new StateGraph(DrawingState)
 
 const compiledGraph = graph.compile();
 
+// Session storage for context persistence
+const sessionContexts = new Map<string, {
+  elements: unknown[];
+  conversationHistory: string;
+  lastUpdate: number;
+}>();
+
 // Main function to run the drawing agent
 export async function runDrawingAgent(
   message: string,
@@ -182,10 +214,18 @@ export async function runDrawingAgent(
   console.log('Starting drawing agent for session:', sessionId);
   console.log('User message:', message);
 
+  // Get existing context for session
+  const existingContext = sessionContexts.get(sessionId);
+  const conversationSummary = existingContext ? 
+    `Previous requests: ${existingContext.conversationHistory}. Current canvas has ${existingContext.elements.length} elements.` : 
+    'First request in session.';
+
   const initialState = {
     messages: [new HumanMessage(message)],
     sessionId,
     iterations: 0,
+    currentElements: existingContext?.elements || [],
+    conversationContext: conversationSummary,
   };
 
   try {
@@ -193,17 +233,22 @@ export async function runDrawingAgent(
     console.log('Agent completed with', result.messages.length, 'total messages');
 
     // Extract drawing events from tool results and call the callback
+    let allElements: unknown[] = existingContext?.elements || [];
+    
     if (onDrawingEvent) {
       for (const msg of result.messages) {
         if (msg instanceof ToolMessage) {
           try {
             const toolResult = JSON.parse(msg.content) as { success: boolean; elements?: unknown[]; message: string };
             if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
+              // Update all elements for context persistence
+              allElements = toolResult.elements;
+              
               // Broadcast to WebSocket clients
               console.log('🚀 Broadcasting drawing elements via WebSocket (non-streaming):', toolResult.elements.length);
               try {
                 const { broadcastDrawing } = await import("@/app/api/draw/ws/route");
-                broadcastDrawing(toolResult.elements as any[], toolResult.message);
+                broadcastDrawing(toolResult.elements as unknown[], toolResult.message);
               } catch (error) {
                 console.error('❌ Non-streaming WebSocket broadcast failed:', error);
               }
@@ -216,6 +261,14 @@ export async function runDrawingAgent(
         }
       }
     }
+
+    // Update session context
+    const currentContext = sessionContexts.get(sessionId) || { elements: [], conversationHistory: '', lastUpdate: 0 };
+    sessionContexts.set(sessionId, {
+      elements: allElements,
+      conversationHistory: currentContext.conversationHistory + ` | ${message}`,
+      lastUpdate: Date.now()
+    });
 
     return { messages: result.messages };
   } catch (error) {
@@ -233,25 +286,38 @@ export async function streamDrawingAgent(
 ): Promise<void> {
   console.log('Starting streaming drawing agent for session:', sessionId);
 
+  // Get existing context for session
+  const existingContext = sessionContexts.get(sessionId);
+  const conversationSummary = existingContext ? 
+    `Previous requests: ${existingContext.conversationHistory}. Current canvas has ${existingContext.elements.length} elements.` : 
+    'First request in session.';
+
   const initialState = {
     messages: [new HumanMessage(message)],
     sessionId,
     iterations: 0,
+    currentElements: existingContext?.elements || [],
+    conversationContext: conversationSummary,
   };
 
   try {
     const stream = await compiledGraph.stream(initialState);
+    let allElements: unknown[] = existingContext?.elements || [];
 
     for await (const chunk of stream) {
       console.log('🌊 Stream chunk received:', Object.keys(chunk));
       console.log('🌊 Chunk details:', JSON.stringify(chunk, null, 2));
 
-      // Handle agent responses
+      // Handle agent responses - only show text if no tool calls are made
       if (chunk.agent) {
         const messages = chunk.agent.messages;
         for (const msg of messages) {
           if (msg instanceof AIMessage && typeof msg.content === 'string') {
-            onUpdate({ type: 'message', content: msg.content });
+            // Only send text response if there are no tool calls (fallback case)
+            const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+            if (!hasToolCalls && msg.content.trim()) {
+              onUpdate({ type: 'message', content: msg.content });
+            }
           }
         }
       }
@@ -278,7 +344,7 @@ export async function streamDrawingAgent(
                   console.log('🚀 Dynamically importing broadcastDrawing function...');
                   const { broadcastDrawing } = await import("@/app/api/draw/ws/route");
                   console.log('🚀 Calling broadcastDrawing function...');
-                  broadcastDrawing(toolResult.elements as any[], toolResult.message);
+                  broadcastDrawing(toolResult.elements as unknown[], toolResult.message);
                   console.log('✅ WebSocket broadcast function call completed');
                 } catch (error) {
                   console.error('❌ WebSocket broadcast failed with error:', error);
@@ -294,16 +360,19 @@ export async function streamDrawingAgent(
               
               // Always send the update regardless of broadcast success
               if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
+                // Update all elements for context persistence
+                allElements = toolResult.elements;
+                
                 onUpdate({
                   type: 'drawing',
                   elements: toolResult.elements,
-                  message: toolResult.message
+                  message: '✨ Drawing updated'
                 });
               } else if (toolResult.success) {
-                // Send message even if no elements (for actions like clear_canvas)
+                // Send brief message for actions like clear_canvas
                 onUpdate({
                   type: 'message',
-                  content: toolResult.message
+                  content: toolResult.message === 'Canvas cleared' ? '🧹 Canvas cleared' : '✅ Action completed'
                 });
               }
             } catch (e) {
@@ -313,6 +382,14 @@ export async function streamDrawingAgent(
         }
       }
     }
+
+    // Update session context after streaming completes
+    const currentContext = sessionContexts.get(sessionId) || { elements: [], conversationHistory: '', lastUpdate: 0 };
+    sessionContexts.set(sessionId, {
+      elements: allElements,
+      conversationHistory: currentContext.conversationHistory + ` | ${message}`,
+      lastUpdate: Date.now()
+    });
 
     onUpdate({ type: 'complete' });
   } catch (error) {

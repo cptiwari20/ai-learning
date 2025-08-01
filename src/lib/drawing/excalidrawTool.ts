@@ -132,13 +132,13 @@ function createExcalidrawElement(
     case 'text':
       const textContent = text || 'Sample text';
       const textWidth = Math.max(textContent.length * (fontSize * 0.6), 50);
-      const textHeight = fontSize * 1.2;
+      const textHeight = fontSize * 1.5; // Increased for better visibility
       return {
         ...baseElement,
         type: 'text',
         text: textContent,
         fontSize,
-        fontFamily: 1,
+        fontFamily: 1, // Virgil (default Excalidraw font)
         textAlign: 'left' as const,
         verticalAlign: 'top' as const,
         containerId: null,
@@ -146,7 +146,8 @@ function createExcalidrawElement(
         autoResize: true,
         width: textWidth,
         height: textHeight,
-        baseline: fontSize,
+        baseline: fontSize * 0.8, // Better baseline calculation
+        lineHeight: 1.25, // Added line height for better text spacing
       } as ExcalidrawElement;
 
     case 'freedraw':

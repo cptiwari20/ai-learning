@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import ExcalidrawWebSocketCanvas from '@/components/ExcalidrawWebSocketCanvas';
 
 interface ChatMessage {
@@ -9,11 +9,70 @@ interface ChatMessage {
   timestamp: Date;
 }
 
+// Get or create persistent session ID
+const getSessionId = () => {
+  if (typeof window !== 'undefined') {
+    let sessionId = sessionStorage.getItem('draw-session-id');
+    if (!sessionId) {
+      sessionId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      sessionStorage.setItem('draw-session-id', sessionId);
+    }
+    return sessionId;
+  }
+  return Math.random().toString(36).substring(2, 15);
+};
+
+// Load chat messages from localStorage
+const loadMessages = (): ChatMessage[] => {
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('draw-chat-messages');
+      if (stored) {
+        const data = JSON.parse(stored);
+        // Convert timestamp strings back to Date objects
+        return data.map((msg: any) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp)
+        }));
+      }
+    } catch (error) {
+      console.warn('Failed to load chat messages:', error);
+    }
+  }
+  return [];
+};
+
+// Save chat messages to localStorage
+const saveMessages = (messages: ChatMessage[]) => {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem('draw-chat-messages', JSON.stringify(messages));
+    } catch (error) {
+      console.warn('Failed to save chat messages:', error);
+    }
+  }
+};
+
 export default function DrawPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(loadMessages);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [sessionId] = useState(getSessionId);
+  
+  // Refs for auto-scroll and input focus
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-scroll to bottom when messages update
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  // Focus input after each interaction
+  const focusInput = useCallback(() => {
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, []);
 
   const addMessage = useCallback((type: 'user' | 'assistant', content: string) => {
     const newMessage: ChatMessage = {
@@ -22,8 +81,15 @@ export default function DrawPage() {
       content,
       timestamp: new Date()
     };
-    setMessages(prev => [...prev, newMessage]);
-  }, []);
+    setMessages(prev => {
+      const updated = [...prev, newMessage];
+      saveMessages(updated);
+      return updated;
+    });
+    
+    // Auto-scroll after adding message
+    setTimeout(scrollToBottom, 100);
+  }, [scrollToBottom]);
 
   const handleDrawingMessage = useCallback((message: string) => {
     addMessage('assistant', message);
@@ -78,40 +144,78 @@ export default function DrawPage() {
                 // Update the last assistant message or create a new one
                 setMessages(prev => {
                   const lastMessage = prev[prev.length - 1];
+                  let updated;
                   if (lastMessage && lastMessage.type === 'assistant') {
-                    return [
+                    updated = [
                       ...prev.slice(0, -1),
                       { ...lastMessage, content: assistantMessage }
                     ];
                   } else {
-                    return [...prev, {
+                    updated = [...prev, {
                       id: Math.random().toString(36).substring(2, 15),
                       type: 'assistant' as const,
                       content: assistantMessage,
                       timestamp: new Date()
                     }];
                   }
+                  saveMessages(updated);
+                  return updated;
                 });
               } else if (data.type === 'drawing' && data.elements) {
-                // Drawing handled via WebSocket, just add message to chat
+                // Drawing event received - add to chat and trigger drawing
+                console.log('🎨 Drawing event received:', data.elements?.length, 'elements');
+                setIsDrawing(true);
+                
                 if (data.message) {
                   assistantMessage += '\n🎨 ' + data.message;
                   setMessages(prev => {
                     const lastMessage = prev[prev.length - 1];
+                    let updated;
                     if (lastMessage && lastMessage.type === 'assistant') {
-                      return [
+                      updated = [
                         ...prev.slice(0, -1),
                         { ...lastMessage, content: assistantMessage }
                       ];
                     } else {
-                      return [...prev, {
+                      updated = [...prev, {
                         id: Math.random().toString(36).substring(2, 15),
                         type: 'assistant' as const,
                         content: assistantMessage,
                         timestamp: new Date()
                       }];
                     }
+                    saveMessages(updated);
+                    setTimeout(scrollToBottom, 100);
+                    return updated;
                   });
+                }
+                
+                // Important: Directly broadcast to WebSocket for immediate drawing
+                if (data.elements && data.elements.length > 0) {
+                  console.log('🚀 Broadcasting drawing elements directly to WebSocket');
+                  
+                  // Directly call WebSocket API to ensure drawing appears
+                  fetch('/api/draw/ws', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'broadcast',
+                      elements: data.elements,
+                      message: data.message || 'Drawing updated'
+                    })
+                  }).then(response => response.json())
+                    .then(result => {
+                      console.log('✅ WebSocket broadcast result:', result);
+                      setIsDrawing(false);
+                      if (result.success) {
+                        handleDrawingMessage('🎨 Drawing updated');
+                      }
+                    })
+                    .catch(error => {
+                      console.error('❌ WebSocket broadcast failed:', error);
+                      setIsDrawing(false);
+                      handleDrawingMessage('⚠️ Drawing update failed');
+                    });
                 }
               } else if (data.type === 'error') {
                 addMessage('assistant', data.content || 'An error occurred');
@@ -127,6 +231,7 @@ export default function DrawPage() {
       addMessage('assistant', 'Sorry, I encountered an error. Please try again.');
     } finally {
       setIsLoading(false);
+      focusInput(); // Re-focus input after completion
     }
   }, [inputValue, isLoading, sessionId, addMessage]);
 
@@ -136,6 +241,18 @@ export default function DrawPage() {
       handleSendMessage();
     }
   }, [handleSendMessage]);
+
+  // Focus input on component mount and when loading changes
+  useEffect(() => {
+    if (!isLoading) {
+      focusInput();
+    }
+  }, [isLoading, focusInput]);
+
+  // Initial scroll to bottom
+  useEffect(() => {
+    scrollToBottom();
+  }, [scrollToBottom]);
 
   return (
     <div className="flex h-screen">
@@ -189,19 +306,52 @@ export default function DrawPage() {
             <div className="flex justify-start">
               <div className="bg-white border border-gray-200 text-gray-800 p-3 rounded-lg">
                 <div className="flex items-center space-x-2">
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                  <span className="text-sm text-gray-600 ml-2">
+                    {isDrawing ? 'Rendering drawing...' : 'Processing request...'}
+                  </span>
                 </div>
               </div>
             </div>
           )}
+          {!isLoading && isDrawing && (
+            <div className="flex justify-start">
+              <div className="bg-green-50 border border-green-200 text-green-800 p-3 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span className="text-sm">🎨 Drawing appearing on canvas...</span>
+                </div>
+              </div>
+            </div>
+          )}
+          {/* Scroll anchor */}
+          <div ref={messagesEndRef} />
         </div>
         
         {/* Input */}
         <div className="p-4 border-t border-gray-200">
+          <div className="flex space-x-2 mb-2">
+            <button
+              onClick={() => {
+                setMessages([]);
+                saveMessages([]);
+                if (typeof window !== 'undefined') {
+                  localStorage.removeItem('excalidraw-canvas-state');
+                }
+              }}
+              className="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm"
+            >
+              🧹 Clear All
+            </button>
+            <div className="text-xs text-gray-500 flex items-center">
+              Session: {sessionId.substring(0, 8)}...
+            </div>
+          </div>
           <div className="flex space-x-2">
             <input
+              ref={inputRef}
               type="text"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
@@ -209,6 +359,7 @@ export default function DrawPage() {
               placeholder="Describe what you want to draw..."
               className="flex-1 p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               disabled={isLoading}
+              autoFocus
             />
             <button
               onClick={handleSendMessage}

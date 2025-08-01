@@ -17,9 +17,56 @@ interface ExcalidrawWebSocketCanvasProps {
   className?: string;
 }
 
+// Browser storage utilities
+const STORAGE_KEY = 'excalidraw-canvas-state';
+const SESSION_KEY = 'excalidraw-session-id';
+
+const saveToStorage = (elements: ExcalidrawElement[]) => {
+  try {
+    const data = {
+      elements,
+      timestamp: Date.now(),
+      version: '1.0'
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (error) {
+    console.warn('Failed to save to localStorage:', error);
+  }
+};
+
+const loadFromStorage = (): ExcalidrawElement[] => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const data = JSON.parse(stored);
+      // Check if data is recent (within 7 days)
+      if (data.timestamp && Date.now() - data.timestamp < 7 * 24 * 60 * 60 * 1000) {
+        return data.elements || [];
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load from localStorage:', error);
+  }
+  return [];
+};
+
+const getOrCreateSessionId = (): string => {
+  try {
+    let sessionId = sessionStorage.getItem(SESSION_KEY);
+    if (!sessionId) {
+      sessionId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      sessionStorage.setItem(SESSION_KEY, sessionId);
+    }
+    return sessionId;
+  } catch (error) {
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  }
+};
+
 export default function ExcalidrawWebSocketCanvas({ onMessage, className }: ExcalidrawWebSocketCanvasProps) {
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawImperativeAPI | null>(null);
   const pendingDrawingMessages = useRef<WSMessage[]>([]);
+  const [persistentSessionId] = useState(getOrCreateSessionId);
   
   // WebSocket state
   const wsRef = useRef<WebSocket | null>(null);
@@ -70,6 +117,9 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, className }: Exca
                   viewBackgroundColor: '#ffffff'
                 }
               });
+              
+              // Save to localStorage for persistence
+              saveToStorage(validElements as ExcalidrawElement[]);
               
               console.log('✅ Scene updated successfully');
               
@@ -137,15 +187,34 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, className }: Exca
     }
   }, [excalidrawAPI, onMessage]);
 
-  // Process pending messages when Excalidraw API becomes available
+  // Load persisted data when Excalidraw API becomes available
   useEffect(() => {
-    if (excalidrawAPI && pendingDrawingMessages.current.length > 0) {
-      const messages = [...pendingDrawingMessages.current];
-      pendingDrawingMessages.current = [];
+    if (excalidrawAPI) {
+      // Load persisted data from localStorage
+      const persistedElements = loadFromStorage();
+      if (persistedElements.length > 0) {
+        console.log('🔄 Loading persisted elements:', persistedElements.length);
+        excalidrawAPI.updateScene({ 
+          elements: persistedElements,
+          appState: {
+            viewBackgroundColor: '#ffffff'
+          }
+        });
+        
+        if (onMessage) {
+          onMessage(`🔄 Restored ${persistedElements.length} elements from previous session`);
+        }
+      }
       
-      messages.forEach(message => handleDrawingMessage(message));
+      // Process any pending messages
+      if (pendingDrawingMessages.current.length > 0) {
+        const messages = [...pendingDrawingMessages.current];
+        pendingDrawingMessages.current = [];
+        
+        messages.forEach(message => handleDrawingMessage(message));
+      }
     }
-  }, [excalidrawAPI, handleDrawingMessage]);
+  }, [excalidrawAPI, handleDrawingMessage, onMessage]);
 
   // Initialize WebSocket connection - run only once
   useEffect(() => {

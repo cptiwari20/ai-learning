@@ -40,12 +40,16 @@ async function agentNode(state: typeof DrawingState.State) {
   
   console.log(`Last message type: ${lastMessage?.constructor.name}`);
   console.log(`Total messages: ${messages.length}`);
+  console.log(`Current elements in state: ${state.currentElements?.length || 0}`);
 
   // Enhanced system prompt with context awareness
   let messagesToSend = messages;
   if (messages.length === 1 && messages[0] instanceof HumanMessage) {
     const currentElementsCount = state.currentElements?.length || 0;
     const conversationSummary = state.conversationContext || '';
+    const canvasDescription = describeCanvasElements(state.currentElements || []);
+    
+    console.log('🎨 Canvas description for AI:', canvasDescription);
     
     const systemPrompt = new AIMessage(`You are an AI drawing assistant that creates ACTUAL VISUAL DRAWINGS using Excalidraw tools.
 
@@ -56,18 +60,24 @@ CRITICAL RULES:
 - DO NOT say what you will draw - JUST DRAW IT
 - Respond ONLY with tool calls, no additional text
 
+${canvasDescription}
+
 CONTEXT AWARENESS:
-- Current canvas has ${currentElementsCount} elements
-- Previous conversation context: ${conversationSummary}
-- When adding new elements, consider existing drawings and build upon them
-- For iterative requests, add to existing content rather than replacing it
+- Previous conversation: ${conversationSummary}
+- CRITICAL: ALWAYS ADD TO existing drawings, NEVER replace them
+- Position new elements to complement what's already there
+- Build logically upon existing content
+- If adding to flowcharts, extend the process
+- If adding to diagrams, create meaningful connections
+- Use consistent colors and styling with existing elements
 
 ACTIONS TO USE:
 - For flowcharts: create_flowchart with steps array
 - For mind maps: create_mindmap with branches array  
 - For simple shapes: draw_rectangle, draw_circle, draw_text, etc.
-- Position new elements to complement existing ones (avoid overlap)
-- Use consistent colors and styling with existing elements
+- DO NOT specify x,y coordinates - positioning is handled automatically
+- Consider the existing layout when choosing what to add
+- Create elements that logically extend or complement current content
 
 Available actions: create_flowchart, create_mindmap, create_diagram, draw_rectangle, draw_circle, draw_line, draw_text, draw_arrow, draw_diamond, clear_canvas
 
@@ -119,7 +129,13 @@ async function toolNode(state: typeof DrawingState.State) {
     
     try {
       if (toolCall.name === 'excalidraw_drawing') {
-        const result = await excalidrawTool.invoke(toolCall.args);
+        // Add current canvas elements to tool args for smart positioning
+        const enhancedArgs = {
+          ...toolCall.args,
+          existingElements: state.currentElements || []
+        };
+        
+        const result = await excalidrawTool.invoke(enhancedArgs);
         console.log('Tool execution result:', result);
         
         const toolMessage = new ToolMessage(result, toolCall.id);
@@ -205,6 +221,146 @@ const sessionContexts = new Map<string, {
   lastUpdate: number;
 }>();
 
+// Function to get current canvas state from WebSocket server
+async function getCurrentCanvasState(): Promise<unknown[]> {
+  try {
+    // Ensure WebSocket server is initialized first
+    await fetch('/api/draw/ws', { method: 'GET' });
+    
+    const response = await fetch('/api/draw/ws', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get_state' })
+    });
+    const result = await response.json();
+    
+    if (result.success && result.elements) {
+      console.log('📋 Retrieved current canvas state:', result.elements.length, 'elements');
+      return result.elements;
+    }
+  } catch (error) {
+    console.warn('Failed to get canvas state:', error);
+  }
+  return [];
+}
+
+// Force synchronization of canvas state before agent execution
+async function syncCanvasState(sessionId: string): Promise<unknown[]> {
+  console.log('🔄 Synchronizing canvas state for session:', sessionId);
+  
+  // Get fresh canvas state from WebSocket
+  const canvasElements = await getCurrentCanvasState();
+  
+  // Update session context immediately
+  const existingContext = sessionContexts.get(sessionId);
+  if (existingContext) {
+    sessionContexts.set(sessionId, {
+      ...existingContext,
+      elements: canvasElements,
+      lastUpdate: Date.now()
+    });
+  }
+  
+  console.log('✅ Canvas state synchronized:', canvasElements.length, 'elements');
+  return canvasElements;
+}
+
+// Enhanced context analysis for RAG-like capabilities
+function analyzeCanvasContext(elements: unknown[]): string {
+  if (!elements || elements.length === 0) {
+    return 'Canvas is empty. Ready for new content.';
+  }
+
+  const analysisPoints: string[] = [];
+  let textElements = 0;
+  let shapeElements = 0;
+  let flowchartLike = false;
+  let mindmapLike = false;
+  
+  // Analyze element types and patterns
+  elements.forEach((el: any) => {
+    if (el?.type === 'text') {
+      textElements++;
+    } else if (['rectangle', 'ellipse', 'diamond'].includes(el?.type)) {
+      shapeElements++;
+    } else if (el?.type === 'arrow') {
+      flowchartLike = true;
+    }
+  });
+  
+  // Detect patterns
+  if (shapeElements > 2 && flowchartLike) {
+    analysisPoints.push('Contains a flowchart or process diagram structure');
+  }
+  if (textElements > shapeElements) {
+    analysisPoints.push('Text-heavy content, suitable for annotations or labels');
+  }
+  if (shapeElements > 0 && !flowchartLike) {
+    analysisPoints.push('Contains standalone shapes, good for building diagrams');
+  }
+  
+  analysisPoints.push(`Has ${elements.length} total elements (${textElements} text, ${shapeElements} shapes)`);
+  
+  return analysisPoints.join('. ') + '.';
+}
+
+// Convert canvas elements to detailed descriptions for AI context
+function describeCanvasElements(elements: unknown[]): string {
+  if (!elements || elements.length === 0) {
+    return 'CURRENT CANVAS: Empty canvas with no elements.';
+  }
+
+  const descriptions: string[] = ['CURRENT CANVAS CONTENTS:'];
+  
+  elements.forEach((el: any, index) => {
+    if (!el || typeof el !== 'object') return;
+    
+    const { type, x, y, width, height, text } = el;
+    let desc = `${index + 1}. ${type}`;
+    
+    // Add position info
+    if (typeof x === 'number' && typeof y === 'number') {
+      desc += ` at position (${Math.round(x)}, ${Math.round(y)})`;
+    }
+    
+    // Add size info
+    if (typeof width === 'number' && typeof height === 'number') {
+      desc += `, size ${Math.round(width)}x${Math.round(height)}`;
+    }
+    
+    // Add text content
+    if (text && typeof text === 'string') {
+      desc += `, containing text: "${text}"`;
+    }
+    
+    // Add color info if available
+    if (el.strokeColor) {
+      desc += `, color: ${el.strokeColor}`;
+    }
+    
+    descriptions.push(desc);
+  });
+  
+  // Add spatial layout summary
+  if (elements.length > 1) {
+    const positions = elements
+      .filter((el: any) => typeof el?.x === 'number' && typeof el?.y === 'number')
+      .map((el: any) => ({ x: el.x, y: el.y }));
+    
+    if (positions.length > 0) {
+      const minX = Math.min(...positions.map(p => p.x));
+      const maxX = Math.max(...positions.map(p => p.x));
+      const minY = Math.min(...positions.map(p => p.y));
+      const maxY = Math.max(...positions.map(p => p.y));
+      
+      descriptions.push(`\nLAYOUT: Elements span from (${Math.round(minX)}, ${Math.round(minY)}) to (${Math.round(maxX)}, ${Math.round(maxY)})`);
+      descriptions.push(`AVAILABLE SPACE: Good areas for new content - right of ${Math.round(maxX + 50)}, below ${Math.round(maxY + 50)}`);
+    }
+  }
+  
+  return descriptions.join('\n');
+}
+
 // Main function to run the drawing agent
 export async function runDrawingAgent(
   message: string,
@@ -214,17 +370,22 @@ export async function runDrawingAgent(
   console.log('Starting drawing agent for session:', sessionId);
   console.log('User message:', message);
 
-  // Get existing context for session
+  // CRITICAL: Sync canvas state before processing to ensure AI has accurate context
+  const currentCanvasElements = await syncCanvasState(sessionId);
   const existingContext = sessionContexts.get(sessionId);
+  
+  // Enhanced context analysis using RAG-like approach
+  const actualElementCount = currentCanvasElements.length;
+  const canvasAnalysis = analyzeCanvasContext(currentCanvasElements);
   const conversationSummary = existingContext ? 
-    `Previous requests: ${existingContext.conversationHistory}. Current canvas has ${existingContext.elements.length} elements.` : 
-    'First request in session.';
+    `Previous requests: ${existingContext.conversationHistory}. Canvas analysis: ${canvasAnalysis}` : 
+    `First request in session. Canvas analysis: ${canvasAnalysis}`;
 
   const initialState = {
     messages: [new HumanMessage(message)],
     sessionId,
     iterations: 0,
-    currentElements: existingContext?.elements || [],
+    currentElements: currentCanvasElements, // Use real canvas state
     conversationContext: conversationSummary,
   };
 
@@ -262,10 +423,11 @@ export async function runDrawingAgent(
       }
     }
 
-    // Update session context
+    // Update session context with final canvas state
+    const finalCanvasState = await getCurrentCanvasState();
     const currentContext = sessionContexts.get(sessionId) || { elements: [], conversationHistory: '', lastUpdate: 0 };
     sessionContexts.set(sessionId, {
-      elements: allElements,
+      elements: finalCanvasState, // Use actual final canvas state
       conversationHistory: currentContext.conversationHistory + ` | ${message}`,
       lastUpdate: Date.now()
     });
@@ -286,17 +448,22 @@ export async function streamDrawingAgent(
 ): Promise<void> {
   console.log('Starting streaming drawing agent for session:', sessionId);
 
-  // Get existing context for session
+  // CRITICAL: Sync canvas state before processing to ensure AI has accurate context
+  const currentCanvasElements = await syncCanvasState(sessionId);
   const existingContext = sessionContexts.get(sessionId);
+  
+  // Enhanced context analysis using RAG-like approach
+  const actualElementCount = currentCanvasElements.length;
+  const canvasAnalysis = analyzeCanvasContext(currentCanvasElements);
   const conversationSummary = existingContext ? 
-    `Previous requests: ${existingContext.conversationHistory}. Current canvas has ${existingContext.elements.length} elements.` : 
-    'First request in session.';
+    `Previous requests: ${existingContext.conversationHistory}. Canvas analysis: ${canvasAnalysis}` : 
+    `First request in session. Canvas analysis: ${canvasAnalysis}`;
 
   const initialState = {
     messages: [new HumanMessage(message)],
     sessionId,
     iterations: 0,
-    currentElements: existingContext?.elements || [],
+    currentElements: currentCanvasElements, // Use real canvas state
     conversationContext: conversationSummary,
   };
 
@@ -383,10 +550,11 @@ export async function streamDrawingAgent(
       }
     }
 
-    // Update session context after streaming completes
+    // Update session context with final canvas state after streaming completes
+    const finalCanvasState = await getCurrentCanvasState();
     const currentContext = sessionContexts.get(sessionId) || { elements: [], conversationHistory: '', lastUpdate: 0 };
     sessionContexts.set(sessionId, {
-      elements: allElements,
+      elements: finalCanvasState, // Use actual final canvas state
       conversationHistory: currentContext.conversationHistory + ` | ${message}`,
       lastUpdate: Date.now()
     });

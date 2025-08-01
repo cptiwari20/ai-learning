@@ -194,12 +194,12 @@ export default function DrawPage() {
                 if (data.elements && data.elements.length > 0) {
                   console.log('🚀 Broadcasting drawing elements directly to WebSocket');
                   
-                  // Directly call WebSocket API to ensure drawing appears
+                  // Use 'add' action to append elements instead of replacing
                   fetch('/api/draw/ws', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      action: 'broadcast',
+                      action: 'add', // Changed from 'broadcast' to 'add' for incremental updates
                       elements: data.elements,
                       message: data.message || 'Drawing updated'
                     })

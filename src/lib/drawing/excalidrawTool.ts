@@ -7,6 +7,42 @@ function generateId(): string {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
+// Smart positioning function to avoid overlaps
+function getSmartPosition(existingElements: ExcalidrawElement[], width = 100, height = 100): { x: number; y: number } {
+  if (!existingElements || existingElements.length === 0) {
+    // Empty canvas - start from center
+    return { x: 400, y: 300 };
+  }
+
+  // Find the bounding box of existing elements
+  let minX = Number.MAX_VALUE, minY = Number.MAX_VALUE;
+  let maxX = Number.MIN_VALUE, maxY = Number.MIN_VALUE;
+  
+  existingElements.forEach(el => {
+    if (typeof el.x === 'number' && typeof el.y === 'number') {
+      minX = Math.min(minX, el.x);
+      minY = Math.min(minY, el.y);
+      maxX = Math.max(maxX, el.x + (el.width || 100));
+      maxY = Math.max(maxY, el.y + (el.height || 100));
+    }
+  });
+
+  // Add some padding
+  const padding = 50;
+  
+  // Try to place to the right first
+  let newX = maxX + padding;
+  let newY = minY;
+  
+  // If too far right, go below
+  if (newX + width > 1200) {
+    newX = minX;
+    newY = maxY + padding;
+  }
+  
+  return { x: newX, y: newY };
+}
+
 // Create Excalidraw element with proper formatting
 function createExcalidrawElement(
   type: 'rectangle' | 'ellipse' | 'line' | 'text' | 'arrow' | 'diamond' | 'freedraw',
@@ -315,11 +351,12 @@ export const excalidrawTool = tool(
     steps?: string[];
     branches?: string[];
     centralTopic?: string;
+    existingElements?: ExcalidrawElement[]; // Add existing elements for smart positioning
   }) => {
     const {
       action,
-      x = 100,
-      y = 100,
+      x,
+      y,
       width = 100,
       height = 100,
       endX,
@@ -332,8 +369,17 @@ export const excalidrawTool = tool(
       title,
       steps,
       branches,
-      centralTopic
+      centralTopic,
+      existingElements = []
     } = input;
+
+    // Use smart positioning if x,y not provided
+    const smartPos = (x === undefined || y === undefined) ? 
+      getSmartPosition(existingElements, width, height) : 
+      { x: x || 100, y: y || 100 };
+    
+    const finalX = x !== undefined ? x : smartPos.x;
+    const finalY = y !== undefined ? y : smartPos.y;
 
     console.log('Excalidraw tool called with:', input);
 
@@ -344,46 +390,46 @@ export const excalidrawTool = tool(
       switch (action) {
         case 'draw_rectangle':
           const rectangle = createExcalidrawElement('rectangle', {
-            x, y, width, height, strokeColor: color, backgroundColor, strokeWidth
+            x: finalX, y: finalY, width, height, strokeColor: color, backgroundColor, strokeWidth
           });
           elements = [rectangle];
-          message = `Drew a rectangle at (${x}, ${y}) with size ${width}x${height}`;
+          message = `Drew a rectangle at (${finalX}, ${finalY}) with size ${width}x${height}`;
           break;
 
         case 'draw_circle':
           const circle = createExcalidrawElement('ellipse', {
-            x, y, width: width, height: width, strokeColor: color, backgroundColor, strokeWidth
+            x: finalX, y: finalY, width: width, height: width, strokeColor: color, backgroundColor, strokeWidth
           });
           elements = [circle];
-          message = `Drew a circle at (${x}, ${y}) with radius ${width/2}`;
+          message = `Drew a circle at (${finalX}, ${finalY}) with radius ${width/2}`;
           break;
 
         case 'draw_diamond':
           const diamond = createExcalidrawElement('diamond', {
-            x, y, width, height, strokeColor: color, backgroundColor, strokeWidth
+            x: finalX, y: finalY, width, height, strokeColor: color, backgroundColor, strokeWidth
           });
           elements = [diamond];
-          message = `Drew a diamond at (${x}, ${y}) with size ${width}x${height}`;
+          message = `Drew a diamond at (${finalX}, ${finalY}) with size ${width}x${height}`;
           break;
 
         case 'draw_line':
           const line = createExcalidrawElement('line', {
-            x, y, endX: endX || x + width, endY: endY || y, strokeColor: color, strokeWidth
+            x: finalX, y: finalY, endX: endX || finalX + width, endY: endY || finalY, strokeColor: color, strokeWidth
           });
           elements = [line];
-          const endPosX = endX || x + width;
-          const endPosY = endY || y;
-          message = `Drew a line from (${x}, ${y}) to (${endPosX}, ${endPosY})`;
+          const endPosX = endX || finalX + width;
+          const endPosY = endY || finalY;
+          message = `Drew a line from (${finalX}, ${finalY}) to (${endPosX}, ${endPosY})`;
           break;
 
         case 'draw_arrow':
           const arrow = createExcalidrawElement('arrow', {
-            x, y, endX: endX || x + width, endY: endY || y, strokeColor: color, strokeWidth, arrowhead: 'arrow'
+            x: finalX, y: finalY, endX: endX || finalX + width, endY: endY || finalY, strokeColor: color, strokeWidth, arrowhead: 'arrow'
           });
           elements = [arrow];
-          const arrowEndX = endX || x + width;
-          const arrowEndY = endY || y;
-          message = `Drew an arrow from (${x}, ${y}) to (${arrowEndX}, ${arrowEndY})`;
+          const arrowEndX = endX || finalX + width;
+          const arrowEndY = endY || finalY;
+          message = `Drew an arrow from (${finalX}, ${finalY}) to (${arrowEndX}, ${arrowEndY})`;
           break;
 
         case 'draw_text':
@@ -391,16 +437,16 @@ export const excalidrawTool = tool(
             throw new Error('Text is required for draw_text action');
           }
           const textElement = createExcalidrawElement('text', {
-            x, y, text, strokeColor: color, fontSize
+            x: finalX, y: finalY, text, strokeColor: color, fontSize
           });
           elements = [textElement];
-          message = `Added text "${text}" at (${x}, ${y})`;
+          message = `Added text "${text}" at (${finalX}, ${finalY})`;
           break;
 
         case 'create_flowchart':
           elements = createFlowchartElements({
-            startX: x,
-            startY: y,
+            startX: finalX,
+            startY: finalY,
             title: title || 'Process Flow',
             steps: steps || ['Start', 'Process', 'Decision', 'End']
           });
@@ -409,8 +455,8 @@ export const excalidrawTool = tool(
 
         case 'create_mindmap':
           elements = createMindMapElements({
-            centerX: x + 200,
-            centerY: y + 200,
+            centerX: finalX + 200,
+            centerY: finalY + 200,
             centralTopic: centralTopic || title || 'Central Topic',
             branches: branches || ['Idea 1', 'Idea 2', 'Idea 3', 'Idea 4']
           });
@@ -421,19 +467,19 @@ export const excalidrawTool = tool(
           // Generic diagram creation - can be enhanced based on context
           const diagramElements = [
             createExcalidrawElement('rectangle', {
-              x, y, width: 150, height: 80, backgroundColor: '#e3f2fd', strokeColor: color
+              x: finalX, y: finalY, width: 150, height: 80, backgroundColor: '#e3f2fd', strokeColor: color
             }),
             createExcalidrawElement('text', {
-              x: x + 10, y: y + 25, text: title || 'Component A', fontSize, strokeColor: color
+              x: finalX + 10, y: finalY + 25, text: title || 'Component A', fontSize, strokeColor: color
             }),
             createExcalidrawElement('arrow', {
-              x: x + 150, y: y + 40, endX: x + 250, endY: y + 40, strokeColor: color
+              x: finalX + 150, y: finalY + 40, endX: finalX + 250, endY: finalY + 40, strokeColor: color
             }),
             createExcalidrawElement('rectangle', {
-              x: x + 250, y, width: 150, height: 80, backgroundColor: '#fff3e0', strokeColor: color
+              x: finalX + 250, y: finalY, width: 150, height: 80, backgroundColor: '#fff3e0', strokeColor: color
             }),
             createExcalidrawElement('text', {
-              x: x + 260, y: y + 25, text: 'Component B', fontSize, strokeColor: color
+              x: finalX + 260, y: finalY + 25, text: 'Component B', fontSize, strokeColor: color
             })
           ];
           elements = diagramElements;
@@ -476,8 +522,8 @@ export const excalidrawTool = tool(
     description: 'Create comprehensive visual diagrams on an Excalidraw canvas. Supports basic shapes (rectangles, circles, diamonds), connectors (lines, arrows), text, and complex diagrams (flowcharts, mind maps). Use this to create detailed visual representations based on user requests.',
     schema: z.object({
       action: z.enum(['draw_rectangle', 'draw_circle', 'draw_diamond', 'draw_line', 'draw_arrow', 'draw_text', 'create_flowchart', 'create_mindmap', 'create_diagram', 'clear_canvas']),
-      x: z.number().optional().describe('X coordinate for the element (default: 100)'),
-      y: z.number().optional().describe('Y coordinate for the element (default: 100)'),
+      x: z.number().optional().describe('X coordinate for the element (auto-positioned if not provided)'),
+      y: z.number().optional().describe('Y coordinate for the element (auto-positioned if not provided)'),
       width: z.number().optional().describe('Width of the element (default: 100)'),
       height: z.number().optional().describe('Height of the element (default: 100)'),
       endX: z.number().optional().describe('End X coordinate for lines and arrows'),

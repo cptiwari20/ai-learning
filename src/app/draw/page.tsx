@@ -1,10 +1,9 @@
 'use client';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Excalidraw } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI, ExcalidrawElement } from '@excalidraw/excalidraw/types/types';
+import ExcalidrawCanvas from '@/components/ExcalidrawCanvas';
 
 import "@excalidraw/excalidraw/index.css";
-import ExcalidrawCanvas from '@/components/ExcalidrawCanvas';
 
 interface ChatMessage {
   id: string;
@@ -27,17 +26,205 @@ export default function DrawPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   const excalidrawRef = useRef<ExcalidrawImperativeAPI>(null);
+  const [excalidrawReady, setExcalidrawReady] = useState(false);
+  const [isClient, setIsClient] = useState(false);
+  const pendingDrawingMessages = useRef<WSMessage[]>([]);
   
   // WebSocket state
   const wsRef = useRef<WebSocket | null>(null);
   const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
   const [clientId, setClientId] = useState<string>('');
 
+  // Set client-side rendering flag
+  useEffect(() => {
+    console.log('🖥️ Setting client-side flag');
+    setIsClient(true);
+  }, []);
+
+  // Function to handle drawing messages - processes them if Excalidraw is ready, otherwise queues them
+  const handleDrawingMessage = useCallback((message: WSMessage) => {
+    console.log('🎨 Handling drawing message:', message.type);
+    console.log('🎨 Excalidraw ready:', excalidrawReady);
+    console.log('🎨 Excalidraw ref exists:', !!excalidrawRef.current);
+    
+    if (!excalidrawReady || !excalidrawRef.current) {
+      console.log('⏳ Excalidraw not ready, queuing message');
+      pendingDrawingMessages.current.push(message);
+      return;
+    }
+    
+    switch (message.type) {
+      case 'sync':
+      case 'drawing':
+        if (message.elements) {
+          console.log('🎨 Processing drawing elements:', message.elements.length);
+          
+          // Validate and clean elements for Excalidraw
+          const validElements = message.elements.filter(el => {
+            const isValid = el && el.id && el.type && typeof el.x === 'number' && typeof el.y === 'number';
+            if (!isValid) {
+              console.warn('❌ Invalid element filtered out:', el);
+            }
+            return isValid;
+          });
+          
+          if (validElements.length > 0) {
+            console.log('✅ Updating Excalidraw with', validElements.length, 'valid elements');
+            
+            try {
+              // Replace all elements with new drawing from backend
+              excalidrawRef.current.updateScene({ 
+                elements: validElements,
+                appState: {
+                  viewBackgroundColor: '#ffffff'
+                }
+              });
+              console.log('✅ Excalidraw scene updated successfully');
+              
+              // Auto-fit the view to show all elements
+              setTimeout(() => {
+                if (excalidrawRef.current && validElements.length > 0) {
+                  try {
+                    excalidrawRef.current.scrollToContent(validElements, {
+                      fitToContent: true,
+                      animate: true
+                    });
+                    console.log('📐 Auto-fitted view to content');
+                  } catch (error) {
+                    console.warn('Failed to auto-fit view:', error);
+                  }
+                }
+              }, 500);
+            } catch (error) {
+              console.error('❌ Failed to update Excalidraw scene:', error);
+            }
+          }
+        }
+        
+        if (message.message) {
+          setMessages(prev => [...prev, {
+            id: Math.random().toString(36).substring(2, 15),
+            type: 'assistant' as const,
+            content: `🎨 ${message.message}`,
+            timestamp: new Date()
+          }]);
+        }
+        break;
+        
+      case 'update':
+        if (message.elements && excalidrawRef.current) {
+          console.log('➕ Adding elements to existing drawing');
+          const currentElements = excalidrawRef.current.getSceneElements();
+          const validNewElements = message.elements.filter(el => 
+            el && el.id && el.type && typeof el.x === 'number' && typeof el.y === 'number'
+          );
+          const newElements = [...currentElements, ...validNewElements];
+          
+          excalidrawRef.current.updateScene({ 
+            elements: newElements,
+            appState: {
+              viewBackgroundColor: '#ffffff'
+            }
+          });
+          
+          if (message.message) {
+            setMessages(prev => [...prev, {
+              id: Math.random().toString(36).substring(2, 15),
+              type: 'assistant' as const,
+              content: `🎨 ${message.message}`,
+              timestamp: new Date()
+            }]);
+          }
+        }
+        break;
+        
+      case 'clear':
+        if (excalidrawRef.current) {
+          console.log('🧹 Clearing canvas');
+          excalidrawRef.current.updateScene({ elements: [] });
+          if (message.message) {
+            setMessages(prev => [...prev, {
+              id: Math.random().toString(36).substring(2, 15),
+              type: 'assistant' as const,
+              content: `🧹 ${message.message}`,
+              timestamp: new Date()
+            }]);
+          }
+        }
+        break;
+    }
+  }, [excalidrawReady]);
+
+  // Fallback mechanism to detect when Excalidraw is ready
+  useEffect(() => {
+    if (!excalidrawReady) {
+      const checkExcalidrawReady = () => {
+        console.log('🔍 Checking Excalidraw readiness:', {
+          hasRef: !!excalidrawRef.current,
+          hasUpdateScene: excalidrawRef.current && typeof excalidrawRef.current.updateScene === 'function',
+          hasGetSceneElements: excalidrawRef.current && typeof excalidrawRef.current.getSceneElements === 'function'
+        });
+        
+        if (excalidrawRef.current && 
+            typeof excalidrawRef.current.updateScene === 'function' &&
+            typeof excalidrawRef.current.getSceneElements === 'function') {
+          console.log('🎯 Excalidraw detected as ready via fallback mechanism!');
+          setExcalidrawReady(true);
+          return true;
+        }
+        return false;
+      };
+
+      // Check immediately
+      if (checkExcalidrawReady()) return;
+
+      // Poll every 1000ms for up to 15 seconds (give more time for dynamic import)
+      const interval = setInterval(() => {
+        if (checkExcalidrawReady()) {
+          clearInterval(interval);
+        }
+      }, 1000);
+
+      const timeout = setTimeout(() => {
+        clearInterval(interval);
+        console.warn('⏰ Excalidraw ready timeout - checking final state');
+        console.warn('Final ref state:', {
+          hasRef: !!excalidrawRef.current,
+          refMethods: excalidrawRef.current ? Object.keys(excalidrawRef.current) : []
+        });
+        
+        // Only force ready if ref actually exists
+        if (excalidrawRef.current) {
+          console.warn('🔧 Forcing ready state despite timeout');
+          setExcalidrawReady(true);
+        } else {
+          console.error('❌ Excalidraw ref never became available');
+        }
+      }, 15000);
+
+      return () => {
+        clearInterval(interval);
+        clearTimeout(timeout);
+      };
+    }
+  }, [excalidrawReady]);
+
+  // Process pending messages when Excalidraw becomes ready
+  useEffect(() => {
+    if (excalidrawReady && excalidrawRef.current && pendingDrawingMessages.current.length > 0) {
+      console.log('🚀 Processing', pendingDrawingMessages.current.length, 'pending drawing messages');
+      const messages = [...pendingDrawingMessages.current];
+      pendingDrawingMessages.current = [];
+      
+      messages.forEach(message => handleDrawingMessage(message));
+    }
+  }, [excalidrawReady, handleDrawingMessage]);
+
   // Initialize WebSocket connection - run only once
   useEffect(() => {
     console.log('🚀 Initializing WebSocket connection...');
     
-    const connectWebSocket = () => {
+    const connectWebSocket = async () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         console.log('⚠️ WebSocket already connected, skipping');
         return;
@@ -51,13 +238,26 @@ export default function DrawPage() {
       setWsStatus('connecting');
       
       try {
+        // First, ensure the WebSocket server is initialized by calling the API
+        console.log('🔧 Initializing WebSocket server...');
+        try {
+          const initResponse = await fetch('/api/draw/ws');
+          const initResult = await initResponse.json();
+          console.log('📡 WebSocket server status:', initResult);
+        } catch (error) {
+          console.warn('⚠️ Failed to initialize WebSocket server:', error);
+        }
+        
+        // Wait a moment for server to initialize
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
         // Try multiple WebSocket connection strategies
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         
-        // First try connecting to the standalone WebSocket server
+        // Use standalone WebSocket server on port 8080
         const wsUrl = `${protocol}//localhost:8080`;
         
-        // Alternative: If above fails, we could try same-origin connection
+        // Alternative same-origin connection (doesn't work with Next.js API routes)
         // const wsUrl = `${protocol}//${window.location.host}/api/ws`;
         
         console.log('🔌 Creating WebSocket connection to', wsUrl);
@@ -105,7 +305,7 @@ export default function DrawPage() {
             console.log('📨 Elements count:', message.elements?.length || 0);
             console.log('📨 Excalidraw ref exists:', !!excalidrawRef.current);
             
-            // Handle message directly here to avoid dependency issues
+            // Handle message using the new handleDrawingMessage function
             switch (message.type) {
               case 'connect':
                 if (message.clientId) {
@@ -116,142 +316,9 @@ export default function DrawPage() {
                 
               case 'sync':
               case 'drawing':
-                console.log('🎯 Processing sync/drawing message');
-                console.log('🎯 Has elements:', !!message.elements);
-                console.log('🎯 Has excalidraw ref:', !!excalidrawRef.current);
-                
-                if (message.elements && excalidrawRef.current) {
-                  console.log('🎨 Processing drawing elements:', message.elements.length);
-                  console.log('🎨 First element sample:', message.elements[0]);
-                  
-                  // Validate and clean elements for Excalidraw
-                  const validElements = message.elements.filter(el => {
-                    const isValid = el && el.id && el.type && typeof el.x === 'number' && typeof el.y === 'number';
-                    if (!isValid) {
-                      console.warn('❌ Invalid element filtered out:', el);
-                      console.warn('❌ Element details:', el);
-                    }
-                    return isValid;
-                  });
-                  
-                  console.log('🎨 Valid elements after filtering:', validElements.length);
-                  
-                  if (validElements.length > 0) {
-                    console.log('✅ Updating Excalidraw with', validElements.length, 'valid elements');
-                    console.log('✅ Elements to render:', validElements);
-                    
-                    try {
-                      // Ensure Excalidraw is ready before updating
-                      if (excalidrawRef.current.ready === false) {
-                        console.log('⏳ Excalidraw not ready, waiting...');
-                        setTimeout(() => {
-                          if (excalidrawRef.current) {
-                            excalidrawRef.current.updateScene({ 
-                              elements: validElements,
-                              appState: {
-                                viewBackgroundColor: '#ffffff'
-                              }
-                            });
-                            console.log('✅ Excalidraw scene updated after delay');
-                          }
-                        }, 1000);
-                        return;
-                      }
-                      
-                      // Replace all elements with new drawing from backend
-                      excalidrawRef.current.updateScene({ 
-                        elements: validElements,
-                        appState: {
-                          viewBackgroundColor: '#ffffff'
-                        }
-                      });
-                      console.log('✅ Excalidraw scene updated successfully');
-                      
-                      // Get current scene elements to verify
-                      const currentElements = excalidrawRef.current.getSceneElements();
-                      console.log('✅ Current scene elements count:', currentElements.length);
-                      console.log('✅ Scene elements:', currentElements);
-                      
-                    } catch (error) {
-                      console.error('❌ Failed to update Excalidraw scene:', error);
-                      console.error('❌ Error details:', error);
-                    }
-                    
-                    // Auto-fit the view to show all elements
-                    setTimeout(() => {
-                      if (excalidrawRef.current && validElements.length > 0) {
-                        try {
-                          excalidrawRef.current.scrollToContent(validElements, {
-                            fitToContent: true,
-                            animate: true
-                          });
-                          console.log('📐 Auto-fitted view to content');
-                        } catch (error) {
-                          console.warn('Failed to auto-fit view:', error);
-                        }
-                      }
-                    }, 500);
-                  } else {
-                    console.warn('⚠️ No valid elements to render');
-                  }
-                } else {
-                  console.warn('⚠️ Missing elements or excalidraw ref:', {
-                    hasElements: !!message.elements,
-                    hasRef: !!excalidrawRef.current,
-                    elementsCount: message.elements?.length || 0
-                  });
-                }
-                  
-                  if (message.message) {
-                    setMessages(prev => [...prev, {
-                      id: Math.random().toString(36).substring(2, 15),
-                      type: 'assistant' as const,
-                      content: `🎨 ${message.message}`,
-                      timestamp: new Date()
-                    }]);
-                  }
-                break;
-                
               case 'update':
-                if (message.elements && excalidrawRef.current) {
-                  console.log('➕ Adding elements to existing drawing');
-                  const currentElements = excalidrawRef.current.getSceneElements();
-                  const validNewElements = message.elements.filter(el => 
-                    el && el.id && el.type && typeof el.x === 'number' && typeof el.y === 'number'
-                  );
-                  const newElements = [...currentElements, ...validNewElements];
-                  
-                  excalidrawRef.current.updateScene({ 
-                    elements: newElements,
-                    appState: {
-                      viewBackgroundColor: '#ffffff'
-                    }
-                  });
-                  
-                  if (message.message) {
-                    setMessages(prev => [...prev, {
-                      id: Math.random().toString(36).substring(2, 15),
-                      type: 'assistant' as const,
-                      content: `🎨 ${message.message}`,
-                      timestamp: new Date()
-                    }]);
-                  }
-                }
-                break;
-                
               case 'clear':
-                if (excalidrawRef.current) {
-                  console.log('🧹 Clearing canvas');
-                  excalidrawRef.current.updateScene({ elements: [] });
-                  if (message.message) {
-                    setMessages(prev => [...prev, {
-                      id: Math.random().toString(36).substring(2, 15),
-                      type: 'assistant' as const,
-                      content: `🧹 ${message.message}`,
-                      timestamp: new Date()
-                    }]);
-                  }
-                }
+                handleDrawingMessage(message);
                 break;
                 
               case 'disconnect':
@@ -322,7 +389,7 @@ export default function DrawPage() {
         wsRef.current.close(1000, 'Component unmounting'); // Clean close
       }
     };
-  }, []); // Empty dependency array - run only once
+  }, [handleDrawingMessage]); // Include handleDrawingMessage dependency
 
   const addMessage = useCallback((type: 'user' | 'assistant', content: string) => {
     const newMessage: ChatMessage = {
@@ -731,13 +798,26 @@ export default function DrawPage() {
           </div>
         </div>
         <div className="flex-1">
-          <Excalidraw
+          <ExcalidrawCanvas
             ref={excalidrawRef}
             initialData={{
               elements: [],
               appState: {
                 viewBackgroundColor: '#ffffff'
               }
+            }}
+            onMount={(excalidrawAPI, initialData) => {
+              console.log('🎯 Excalidraw onMount called from DrawPage!');
+              console.log('🎯 ExcalidrawAPI:', !!excalidrawAPI);
+              console.log('🎯 Ref current:', !!excalidrawRef.current);
+              console.log('🎯 API methods:', excalidrawAPI ? Object.keys(excalidrawAPI) : []);
+              
+              // Wait a moment for the ref to be properly set
+              setTimeout(() => {
+                console.log('🎯 Setting Excalidraw ready after mount');
+                console.log('🎯 Final ref check:', !!excalidrawRef.current);
+                setExcalidrawReady(true);
+              }, 100);
             }}
           />
         </div>

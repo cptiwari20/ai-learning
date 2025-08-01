@@ -13,7 +13,9 @@
       "Bash(npm install)",
       "Bash(timeout:*)",
       "Bash(lsof:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(pkill:*)",
+      "Bash(true)"
     ],
     "deny": []
   }

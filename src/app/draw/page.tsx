@@ -91,9 +91,16 @@ export default function DrawPage() {
     setTimeout(scrollToBottom, 100);
   }, [scrollToBottom]);
 
+  const [currentCanvasElements, setCurrentCanvasElements] = useState<unknown[]>([]);
+  
   const handleDrawingMessage = useCallback((message: string) => {
     addMessage('assistant', message);
   }, [addMessage]);
+
+  const handleCanvasStateUpdate = useCallback((elements: unknown[]) => {
+    console.log('📋 Canvas state updated:', elements.length, 'elements');
+    setCurrentCanvasElements(elements);
+  }, []);
 
   const handleSendMessage = useCallback(async () => {
     if (!inputValue.trim() || isLoading) return;
@@ -111,7 +118,8 @@ export default function DrawPage() {
         },
         body: JSON.stringify({
           message: userMessage,
-          sessionId
+          sessionId,
+          currentCanvasElements: currentCanvasElements || []
         })
       });
 
@@ -378,7 +386,10 @@ export default function DrawPage() {
           <h1 className="text-xl font-semibold text-gray-800">Interactive Drawing Canvas</h1>
         </div>
         <div className="flex-1">
-          <ExcalidrawWebSocketCanvas onMessage={handleDrawingMessage} />
+          <ExcalidrawWebSocketCanvas 
+            onMessage={handleDrawingMessage}
+            onCanvasStateUpdate={handleCanvasStateUpdate}
+          />
         </div>
       </div>
     </div>

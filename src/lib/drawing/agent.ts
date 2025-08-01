@@ -62,24 +62,54 @@ CRITICAL RULES:
 
 ${canvasDescription}
 
+SPATIAL INTELLIGENCE RULES:
+- Study the spatial map above to understand existing layout
+- Use the OPTIMAL AREAS suggested for placing new content
+- NEVER place elements in occupied regions
+- Follow the spatial distribution patterns shown
+- If CONNECTION OPPORTUNITIES are suggested, CREATE THOSE ARROWS
+- Place new elements in empty regions or adjacent to existing content
+
+ARROW CONNECTIVITY PRIORITY:
+- ALWAYS look for opportunities to connect related elements with arrows
+- Use draw_arrow to connect shapes that should be related
+- Create logical flow between elements (e.g., process steps, relationships)
+- Connect new elements to existing ones when it makes sense
+- Arrows should show direction of flow, relationships, or dependencies
+
+POSITIONING INTELLIGENCE:
+- The system provides specific optimal areas - USE THEM
+- Elements will be automatically positioned in suggested regions
+- Trust the spatial analysis to avoid overlaps
+- New content will be placed in empty regions first
+- Then adjacent to existing content with proper spacing
+
 CONTEXT AWARENESS:
 - Previous conversation: ${conversationSummary}
 - CRITICAL: ALWAYS ADD TO existing drawings, NEVER replace them
-- Position new elements to complement what's already there
-- Build logically upon existing content
-- If adding to flowcharts, extend the process
-- If adding to diagrams, create meaningful connections
+- Each new request should ADD elements that complement existing ones
+- Build logically upon existing content with proper connections
+- If extending workflows, add connecting arrows between steps
+- If adding related concepts, connect them to existing elements
 - Use consistent colors and styling with existing elements
 
-ACTIONS TO USE:
-- For flowcharts: create_flowchart with steps array
-- For mind maps: create_mindmap with branches array  
-- For simple shapes: draw_rectangle, draw_circle, draw_text, etc.
-- DO NOT specify x,y coordinates - positioning is handled automatically
-- Consider the existing layout when choosing what to add
-- Create elements that logically extend or complement current content
+ACTIONS TO USE (in order of preference):
+1. connect_elements - to connect existing elements with smart arrows (use exact fromElementIndex and toElementIndex from opportunities above)
+2. draw_rectangle, draw_circle, draw_diamond - for new content blocks
+3. draw_text - for labels and annotations  
+4. draw_arrow - for manual arrow positioning (when connect_elements isn't suitable)
+5. create_flowchart - for process sequences with built-in connections
+6. create_mindmap - for concept relationships with radial connections
+7. create_diagram - for structured layouts with connections
 
-Available actions: create_flowchart, create_mindmap, create_diagram, draw_rectangle, draw_circle, draw_line, draw_text, draw_arrow, draw_diamond, clear_canvas
+MANDATORY CONNECTION PROTOCOL:
+- If CONNECTION OPPORTUNITIES are listed above, USE THE EXACT ACTIONS PROVIDED
+- Example: "connect_elements with fromElementIndex: 0, toElementIndex: 2" becomes action: "connect_elements", fromElementIndex: 0, toElementIndex: 2
+- ALWAYS execute connection opportunities BEFORE adding new content
+- Use connect_elements for precise element-to-element connections
+- Use draw_arrow only for general arrows not connecting specific elements
+
+Available actions: connect_elements, create_flowchart, create_mindmap, create_diagram, draw_rectangle, draw_circle, draw_line, draw_text, draw_arrow, draw_diamond, clear_canvas
 
 RESPOND ONLY WITH TOOL CALLS - NO TEXT RESPONSES.`);
     
@@ -304,74 +334,375 @@ function analyzeCanvasContext(elements: unknown[]): string {
   return analysisPoints.join('. ') + '.';
 }
 
-// Convert canvas elements to detailed descriptions for AI context
+// Convert canvas elements to detailed descriptions for AI context with spatial intelligence
 function describeCanvasElements(elements: unknown[]): string {
   if (!elements || elements.length === 0) {
-    return 'CURRENT CANVAS: Empty canvas with no elements.';
+    return 'CURRENT CANVAS: Empty canvas with no elements. Start from upper-left area (150, 150) for natural flow.';
   }
 
-  const descriptions: string[] = ['CURRENT CANVAS CONTENTS:'];
+  const validElements = elements.filter((el: any) => el && typeof el === 'object');
   
-  elements.forEach((el: any, index) => {
-    if (!el || typeof el !== 'object') return;
-    
-    const { type, x, y, width, height, text } = el;
-    let desc = `${index + 1}. ${type}`;
-    
-    // Add position info
-    if (typeof x === 'number' && typeof y === 'number') {
-      desc += ` at position (${Math.round(x)}, ${Math.round(y)})`;
-    }
-    
-    // Add size info
-    if (typeof width === 'number' && typeof height === 'number') {
-      desc += `, size ${Math.round(width)}x${Math.round(height)}`;
-    }
-    
-    // Add text content
-    if (text && typeof text === 'string') {
-      desc += `, containing text: "${text}"`;
-    }
-    
-    // Add color info if available
-    if (el.strokeColor) {
-      desc += `, color: ${el.strokeColor}`;
-    }
-    
-    descriptions.push(desc);
+  // Create spatial map of the canvas
+  const spatialMap = createSpatialMap(validElements);
+  const descriptions: string[] = ['CURRENT CANVAS SPATIAL MAP:'];
+  
+  // Describe the spatial layout
+  descriptions.push(`Canvas has ${validElements.length} elements distributed across ${spatialMap.regions.length} regions`);
+  
+  // Describe each spatial region
+  spatialMap.regions.forEach((region, index) => {
+    descriptions.push(`Region ${index + 1} (${region.bounds.left}-${region.bounds.right}, ${region.bounds.top}-${region.bounds.bottom}): ${region.elements.length} elements`);
+    region.elements.forEach((el: any) => {
+      const desc = `  - ${el.type}${el.text ? ` "${el.text}"` : ''} at (${Math.round(el.x)}, ${Math.round(el.y)})`;
+      descriptions.push(desc);
+    });
   });
   
-  // Add spatial layout summary
-  if (elements.length > 1) {
-    const positions = elements
-      .filter((el: any) => typeof el?.x === 'number' && typeof el?.y === 'number')
-      .map((el: any) => ({ x: el.x, y: el.y }));
-    
-    if (positions.length > 0) {
-      const minX = Math.min(...positions.map(p => p.x));
-      const maxX = Math.max(...positions.map(p => p.x));
-      const minY = Math.min(...positions.map(p => p.y));
-      const maxY = Math.max(...positions.map(p => p.y));
-      
-      descriptions.push(`\nLAYOUT: Elements span from (${Math.round(minX)}, ${Math.round(minY)}) to (${Math.round(maxX)}, ${Math.round(maxY)})`);
-      descriptions.push(`AVAILABLE SPACE: Good areas for new content - right of ${Math.round(maxX + 50)}, below ${Math.round(maxY + 50)}`);
-    }
+  // Analyze connections and relationships
+  const connections = analyzeElementConnections(validElements);
+  if (connections.length > 0) {
+    descriptions.push('\nEXISTING CONNECTIONS:');
+    connections.forEach(conn => {
+      descriptions.push(`  - ${conn.from.type} → ${conn.to.type} (${conn.relationship})`);
+    });
+  }
+  
+  // Find optimal areas for new content
+  const optimalAreas = findOptimalAreasForNewContent(spatialMap);
+  descriptions.push('\nOPTIMAL AREAS FOR NEW CONTENT:');
+  optimalAreas.forEach((area, index) => {
+    descriptions.push(`  ${index + 1}. (${area.x}, ${area.y}) - ${area.reason}`);
+  });
+  
+  // Suggest connection opportunities
+  const connectionOpportunities = suggestConnectionOpportunities(validElements);
+  if (connectionOpportunities.length > 0) {
+    descriptions.push('\nCONNECTION OPPORTUNITIES (USE THESE EXACT ACTIONS):');
+    connectionOpportunities.forEach((opp, index) => {
+      descriptions.push(`  ${index + 1}. ${opp.action}`);
+      descriptions.push(`     - Connects: ${opp.from} → ${opp.to}`);
+      descriptions.push(`     - Direction: ${opp.type}`);
+    });
   }
   
   return descriptions.join('\n');
+}
+
+// Create spatial map dividing canvas into regions
+function createSpatialMap(elements: any[]): { regions: Array<{ bounds: { left: number, right: number, top: number, bottom: number }, elements: any[] }> } {
+  const canvasWidth = 1400;
+  const canvasHeight = 1000;
+  const regionWidth = 350; // Divide into 4x3 grid
+  const regionHeight = 250;
+  
+  const regions: Array<{ bounds: { left: number, right: number, top: number, bottom: number }, elements: any[] }> = [];
+  
+  // Create grid regions
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 4; col++) {
+      const bounds = {
+        left: col * regionWidth,
+        right: (col + 1) * regionWidth,
+        top: row * regionHeight,
+        bottom: (row + 1) * regionHeight
+      };
+      
+      const regionElements = elements.filter((el: any) => {
+        return el.x >= bounds.left && el.x < bounds.right && 
+               el.y >= bounds.top && el.y < bounds.bottom;
+      });
+      
+      if (regionElements.length > 0) {
+        regions.push({ bounds, elements: regionElements });
+      }
+    }
+  }
+  
+  return { regions };
+}
+
+// Analyze connections between elements
+function analyzeElementConnections(elements: any[]): Array<{ from: any, to: any, relationship: string }> {
+  const connections: Array<{ from: any, to: any, relationship: string }> = [];
+  const arrows = elements.filter((el: any) => el.type === 'arrow');
+  
+  arrows.forEach((arrow: any) => {
+    // Find elements that this arrow connects
+    const startPoint = { x: arrow.x, y: arrow.y };
+    const endPoint = { 
+      x: arrow.x + (arrow.points?.[arrow.points.length - 1]?.[0] || 0),
+      y: arrow.y + (arrow.points?.[arrow.points.length - 1]?.[1] || 0)
+    };
+    
+    // Find nearest elements to start and end points
+    const fromElement = findNearestElement(startPoint, elements.filter(el => el !== arrow));
+    const toElement = findNearestElement(endPoint, elements.filter(el => el !== arrow));
+    
+    if (fromElement && toElement) {
+      connections.push({
+        from: fromElement,
+        to: toElement,
+        relationship: 'arrow connection'
+      });
+    }
+  });
+  
+  return connections;
+}
+
+// Find nearest element to a point
+function findNearestElement(point: { x: number, y: number }, elements: any[]): any | null {
+  let nearest = null;
+  let minDistance = Infinity;
+  
+  elements.forEach((el: any) => {
+    const centerX = el.x + (el.width || 100) / 2;
+    const centerY = el.y + (el.height || 100) / 2;
+    const distance = Math.sqrt(Math.pow(point.x - centerX, 2) + Math.pow(point.y - centerY, 2));
+    
+    if (distance < minDistance && distance < 100) { // Within 100px
+      minDistance = distance;
+      nearest = el;
+    }
+  });
+  
+  return nearest;
+}
+
+// Find optimal areas for new content based on spatial map
+function findOptimalAreasForNewContent(spatialMap: any): Array<{ x: number, y: number, reason: string }> {
+  const areas: Array<{ x: number, y: number, reason: string }> = [];
+  
+  // Find empty regions
+  const canvasWidth = 1400;
+  const canvasHeight = 1000;
+  const regionWidth = 350;
+  const regionHeight = 250;
+  
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 4; col++) {
+      const bounds = {
+        left: col * regionWidth,
+        right: (col + 1) * regionWidth,
+        top: row * regionHeight,
+        bottom: (row + 1) * regionHeight
+      };
+      
+      const hasElements = spatialMap.regions.some((region: any) => 
+        region.bounds.left === bounds.left && region.bounds.top === bounds.top
+      );
+      
+      if (!hasElements) {
+        areas.push({
+          x: bounds.left + 50,
+          y: bounds.top + 50,
+          reason: `Empty region ${row + 1},${col + 1} - ideal for new content`
+        });
+      }
+    }
+  }
+  
+  // If no empty regions, suggest areas adjacent to existing content
+  if (areas.length === 0 && spatialMap.regions.length > 0) {
+    const lastRegion = spatialMap.regions[spatialMap.regions.length - 1];
+    areas.push({
+      x: lastRegion.bounds.right + 50,
+      y: lastRegion.bounds.top + 50,
+      reason: 'Adjacent to existing content - natural continuation'
+    });
+  }
+  
+  return areas;
+}
+
+// Suggest connection opportunities between elements
+function suggestConnectionOpportunities(elements: any[]): Array<{ from: string, to: string, type: string, fromIndex: number, toIndex: number, action: string }> {
+  const opportunities: Array<{ from: string, to: string, type: string, fromIndex: number, toIndex: number, action: string }> = [];
+  const shapes = elements.filter((el: any) => ['rectangle', 'ellipse', 'diamond'].includes(el.type));
+  
+  // Create a map to find original indices
+  const shapeIndexMap = new Map();
+  shapes.forEach((shape, shapeIndex) => {
+    const originalIndex = elements.findIndex(el => el === shape);
+    shapeIndexMap.set(shapeIndex, originalIndex);
+  });
+  
+  // Check if elements are already connected by existing arrows
+  const existingConnections = new Set();
+  const arrows = elements.filter((el: any) => el.type === 'arrow');
+  
+  arrows.forEach((arrow: any) => {
+    // Find which elements this arrow connects
+    const startPoint = { x: arrow.x, y: arrow.y };
+    const endPoint = { 
+      x: arrow.x + (arrow.points?.[arrow.points.length - 1]?.[0] || 0),
+      y: arrow.y + (arrow.points?.[arrow.points.length - 1]?.[1] || 0)
+    };
+    
+    const fromEl = findNearestElement(startPoint, shapes);
+    const toEl = findNearestElement(endPoint, shapes);
+    
+    if (fromEl && toEl) {
+      const fromIdx = shapes.indexOf(fromEl);
+      const toIdx = shapes.indexOf(toEl);
+      existingConnections.add(`${fromIdx}-${toIdx}`);
+      existingConnections.add(`${toIdx}-${fromIdx}`); // Bidirectional
+    }
+  });
+  
+  // Look for disconnected elements that could be connected
+  for (let i = 0; i < shapes.length - 1; i++) {
+    for (let j = i + 1; j < shapes.length; j++) {
+      // Skip if already connected
+      if (existingConnections.has(`${i}-${j}`)) {
+        continue;
+      }
+      
+      const el1 = shapes[i];
+      const el2 = shapes[j];
+      
+      // Check if elements are aligned horizontally or vertically
+      const horizontallyAligned = Math.abs(el1.y - el2.y) < 50;
+      const verticallyAligned = Math.abs(el1.x - el2.x) < 50;
+      
+      if (horizontallyAligned || verticallyAligned) {
+        const distance = Math.sqrt(Math.pow(el1.x - el2.x, 2) + Math.pow(el1.y - el2.y, 2));
+        if (distance > 100 && distance < 500) { // Good distance for connection
+          const originalFromIndex = shapeIndexMap.get(i);
+          const originalToIndex = shapeIndexMap.get(j);
+          
+          opportunities.push({
+            from: el1.text || `${el1.type} at (${Math.round(el1.x)}, ${Math.round(el1.y)})`,
+            to: el2.text || `${el2.type} at (${Math.round(el2.x)}, ${Math.round(el2.y)})`,
+            type: horizontallyAligned ? 'horizontal arrow' : 'vertical arrow',
+            fromIndex: originalFromIndex,
+            toIndex: originalToIndex,
+            action: `connect_elements with fromElementIndex: ${originalFromIndex}, toElementIndex: ${originalToIndex}`
+          });
+        }
+      }
+    }
+  }
+  
+  return opportunities.slice(0, 4); // Limit to top 4 suggestions
+}
+
+// Get relative position description
+function getPositionDescription(x: number, y: number, elements: any[], currentIndex: number): string {
+  if (currentIndex === 0) return ' (starting point)';
+  
+  const prevElement = elements[currentIndex - 1];
+  if (!prevElement) return '';
+  
+  const dx = x - prevElement.x;
+  const dy = y - prevElement.y;
+  
+  if (Math.abs(dy) < 30) { // Same row
+    return dx > 0 ? ' (to the right)' : ' (to the left)';
+  } else if (Math.abs(dx) < 30) { // Same column
+    return dy > 0 ? ' (below)' : ' (above)';
+  } else {
+    return dx > 0 && dy > 0 ? ' (down-right)' : 
+           dx > 0 && dy < 0 ? ' (up-right)' :
+           dx < 0 && dy > 0 ? ' (down-left)' : ' (up-left)';
+  }
+}
+
+// Analyze the pattern and flow of existing elements
+function analyzePatternAndFlow(elements: any[]): string {
+  if (elements.length < 2) {
+    return '\nPATTERN: Single element - can expand in any logical direction';
+  }
+  
+  const arrows = elements.filter((el: any) => el.type === 'arrow');
+  const shapes = elements.filter((el: any) => ['rectangle', 'ellipse', 'diamond'].includes(el.type));
+  const texts = elements.filter((el: any) => el.type === 'text');
+  
+  // Analyze spatial arrangement
+  const xPositions = elements.map((el: any) => el.x).sort((a, b) => a - b);
+  const yPositions = elements.map((el: any) => el.y).sort((a, b) => a - b);
+  
+  const xSpread = xPositions[xPositions.length - 1] - xPositions[0];
+  const ySpread = yPositions[yPositions.length - 1] - yPositions[0];
+  
+  let pattern = '\nPATTERN: ';
+  
+  if (arrows.length > 0 && shapes.length > 1) {
+    if (xSpread > ySpread * 1.5) {
+      pattern += 'Horizontal flowchart/process - continues rightward or wraps to next row';
+    } else if (ySpread > xSpread * 1.5) {
+      pattern += 'Vertical flowchart/process - continues downward';
+    } else {
+      pattern += 'Multi-directional diagram - can expand in multiple directions';
+    }
+  } else if (shapes.length > 2 && arrows.length === 0) {
+    pattern += 'Collection of shapes - good for connecting with arrows or grouping';
+  } else if (texts.length > shapes.length) {
+    pattern += 'Text-heavy content - good for adding visual elements or structure';
+  } else {
+    pattern += 'Mixed content - can be extended logically based on context';
+  }
+  
+  return pattern;
+}
+
+// Suggest natural continuation areas
+function suggestContinuationAreas(elements: any[]): string {
+  if (elements.length === 0) return '';
+  
+  const xPositions = elements.map((el: any) => el.x + (el.width || 100));
+  const yPositions = elements.map((el: any) => el.y + (el.height || 100));
+  
+  const rightmost = Math.max(...xPositions);
+  const bottommost = Math.max(...yPositions);
+  const leftmost = Math.min(...elements.map((el: any) => el.x));
+  const topmost = Math.min(...elements.map((el: any) => el.y));
+  
+  const suggestions: string[] = [];
+  
+  // Suggest continuation areas based on existing layout
+  if (rightmost < 1000) {
+    suggestions.push(`right of (${rightmost + 60}, ${topmost + 50})`);
+  }
+  
+  if (bottommost < 600) {
+    suggestions.push(`below (${leftmost + 50}, ${bottommost + 60})`);
+  }
+  
+  // Check for gaps in the middle
+  const midX = (leftmost + rightmost) / 2;
+  const midY = (topmost + bottommost) / 2;
+  
+  const hasElementInMiddle = elements.some((el: any) => 
+    Math.abs(el.x - midX) < 100 && Math.abs(el.y - midY) < 100
+  );
+  
+  if (!hasElementInMiddle && elements.length > 2) {
+    suggestions.push(`center area (${Math.round(midX)}, ${Math.round(midY)})`);
+  }
+  
+  return `\nNATURAL CONTINUATION: Best areas - ${suggestions.join(', ')}`;
 }
 
 // Main function to run the drawing agent
 export async function runDrawingAgent(
   message: string,
   sessionId: string,
-  onDrawingEvent?: (elements: unknown[], message: string) => void
+  onDrawingEvent?: (elements: unknown[], message: string) => void,
+  frontendCanvasElements?: unknown[]
 ): Promise<{ messages: BaseMessage[] }> {
   console.log('Starting drawing agent for session:', sessionId);
   console.log('User message:', message);
 
-  // CRITICAL: Sync canvas state before processing to ensure AI has accurate context
-  const currentCanvasElements = await syncCanvasState(sessionId);
+  // Use frontend canvas elements if provided, otherwise sync from WebSocket server
+  const currentCanvasElements = frontendCanvasElements && frontendCanvasElements.length > 0 ? 
+    frontendCanvasElements : 
+    await syncCanvasState(sessionId);
+  
+  console.log('🎯 Using canvas elements:', { 
+    fromFrontend: !!frontendCanvasElements && frontendCanvasElements.length > 0,
+    elementsCount: currentCanvasElements.length 
+  });
   const existingContext = sessionContexts.get(sessionId);
   
   // Enhanced context analysis using RAG-like approach
@@ -444,12 +775,20 @@ export async function runDrawingAgent(
 export async function streamDrawingAgent(
   message: string,
   sessionId: string,
-  onUpdate: (data: { type: string; content?: string; elements?: unknown[]; message?: string }) => void
+  onUpdate: (data: { type: string; content?: string; elements?: unknown[]; message?: string }) => void,
+  frontendCanvasElements?: unknown[]
 ): Promise<void> {
   console.log('Starting streaming drawing agent for session:', sessionId);
 
-  // CRITICAL: Sync canvas state before processing to ensure AI has accurate context
-  const currentCanvasElements = await syncCanvasState(sessionId);
+  // Use frontend canvas elements if provided, otherwise sync from WebSocket server
+  const currentCanvasElements = frontendCanvasElements && frontendCanvasElements.length > 0 ? 
+    frontendCanvasElements : 
+    await syncCanvasState(sessionId);
+  
+  console.log('🎯 Using canvas elements:', { 
+    fromFrontend: !!frontendCanvasElements && frontendCanvasElements.length > 0,
+    elementsCount: currentCanvasElements.length 
+  });
   const existingContext = sessionContexts.get(sessionId);
   
   // Enhanced context analysis using RAG-like approach

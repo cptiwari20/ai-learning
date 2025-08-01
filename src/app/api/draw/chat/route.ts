@@ -3,7 +3,7 @@ import { streamDrawingAgent } from '@/lib/drawing/agent';
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, sessionId } = await request.json();
+    const { message, sessionId, currentCanvasElements } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
-    console.log('Drawing API called:', { message, sessionId });
+    console.log('Drawing API called:', { message, sessionId, canvasElementsCount: currentCanvasElements?.length || 0 });
 
     // Create a readable stream for server-sent events
     const encoder = new TextEncoder();
@@ -32,7 +32,8 @@ export async function POST(request: NextRequest) {
               controller.enqueue(
                 encoder.encode('data: ' + JSON.stringify(data) + '\n\n')
               );
-            }
+            },
+            currentCanvasElements // Pass current canvas elements
           );
 
           // Send completion event

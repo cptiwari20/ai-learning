@@ -14,6 +14,7 @@ interface WSMessage {
 
 interface ExcalidrawWebSocketCanvasProps {
   onMessage?: (message: string) => void;
+  onCanvasStateUpdate?: (elements: unknown[]) => void;
   className?: string;
 }
 
@@ -63,7 +64,7 @@ const getOrCreateSessionId = (): string => {
   }
 };
 
-export default function ExcalidrawWebSocketCanvas({ onMessage, className }: ExcalidrawWebSocketCanvasProps) {
+export default function ExcalidrawWebSocketCanvas({ onMessage, onCanvasStateUpdate, className }: ExcalidrawWebSocketCanvasProps) {
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawImperativeAPI | null>(null);
   const pendingDrawingMessages = useRef<WSMessage[]>([]);
   const [persistentSessionId] = useState(getOrCreateSessionId);
@@ -121,6 +122,11 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, className }: Exca
               // Save to localStorage for persistence
               saveToStorage(validElements as ExcalidrawElement[]);
               
+              // Notify parent component of canvas state change
+              if (onCanvasStateUpdate) {
+                onCanvasStateUpdate(validElements);
+              }
+              
               console.log('✅ Scene updated successfully');
               
               // Verify the update worked
@@ -170,6 +176,12 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, className }: Exca
             }
           });
           
+          // Save updated state and notify parent
+          saveToStorage(newElements as ExcalidrawElement[]);
+          if (onCanvasStateUpdate) {
+            onCanvasStateUpdate(newElements);
+          }
+          
           if (message.message && onMessage) {
             onMessage(`🎨 ${message.message}`);
           }
@@ -179,6 +191,10 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, className }: Exca
       case 'clear':
         if (excalidrawAPI) {
           excalidrawAPI.updateScene({ elements: [] });
+          saveToStorage([]);
+          if (onCanvasStateUpdate) {
+            onCanvasStateUpdate([]);
+          }
           if (message.message && onMessage) {
             onMessage(`🧹 ${message.message}`);
           }
@@ -200,6 +216,11 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, className }: Exca
             viewBackgroundColor: '#ffffff'
           }
         });
+        
+        // Notify parent of initial canvas state
+        if (onCanvasStateUpdate) {
+          onCanvasStateUpdate(persistedElements);
+        }
         
         if (onMessage) {
           onMessage(`🔄 Restored ${persistedElements.length} elements from previous session`);
@@ -527,7 +548,16 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, className }: Exca
       
       {/* Excalidraw Canvas */}
       <div className="flex-1">
-        <Excalidraw excalidrawAPI={(api: ExcalidrawImperativeAPI) => setExcalidrawAPI(api)} />
+        <Excalidraw 
+          excalidrawAPI={(api: ExcalidrawImperativeAPI) => setExcalidrawAPI(api)}
+          onChange={(elements) => {
+            // Save user changes to storage and notify parent
+            saveToStorage(elements as ExcalidrawElement[]);
+            if (onCanvasStateUpdate) {
+              onCanvasStateUpdate(elements);
+            }
+          }}
+        />
       </div>
     </div>
   );

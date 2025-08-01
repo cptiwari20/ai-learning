@@ -22,9 +22,9 @@ const ExcalidrawCanvas = forwardRef<ExcalidrawImperativeAPI, ExcalidrawCanvasPro
       const loadExcalidraw = async () => {
         try {
           console.log('🔄 Loading Excalidraw module...');
-          const module = await import('@excalidraw/excalidraw');
+          const { Excalidraw } = await import('@excalidraw/excalidraw');
           console.log('✅ Excalidraw module loaded');
-          setExcalidraw(() => module.Excalidraw);
+          setExcalidraw(() => Excalidraw);
           setIsLoading(false);
         } catch (error) {
           console.error('❌ Failed to load Excalidraw:', error);

@@ -3,6 +3,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import ExcalidrawWebSocketCanvas from '@/components/ExcalidrawWebSocketCanvas';
 import GlobalAudioControls from '@/components/GlobalAudioControls';
 import { useAgentTTS } from '@/hooks/useAgentTTS';
+import { useUserSession } from '@/hooks/useUserSession';
 
 interface ChatMessage {
   id: string;
@@ -60,8 +61,10 @@ export default function DrawPage() {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [sessionId] = useState(getSessionId);
   const [autoTTS, setAutoTTS] = useState(false);
+  
+  // Use RAG-enabled user session
+  const { userId, sessionId, isLoading: sessionLoading, startNewSession, clearUserData } = useUserSession();
   
   // Refs for auto-scroll and input focus
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -378,20 +381,31 @@ export default function DrawPage() {
                 saveMessages([]);
                 setCurrentCanvasElements([]);
                 
+                // Clear RAG user data and create new session
+                clearUserData();
+                
                 // Clear all localStorage
                 if (typeof window !== 'undefined') {
                   localStorage.removeItem('excalidraw-canvas-state');
                   localStorage.removeItem('draw-chat-messages');
                 }
                 
-                console.log('🧹 All data cleared');
+                console.log('🧹 All data cleared including RAG context');
               }}
               className="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm"
             >
               🧹 Clear All
             </button>
-            <div className="text-xs text-gray-500 flex items-center">
-              Session: {sessionId.substring(0, 8)}...
+            <div className="text-xs text-gray-500 flex items-center gap-2">
+              <span>User: {userId.substring(0, 8)}...</span>
+              <span>Session: {sessionId.substring(0, 8)}...</span>
+              <button
+                onClick={() => startNewSession()}
+                className="px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-xs"
+                title="Start new learning session"
+              >
+                🆕 New Session
+              </button>
             </div>
           </div>
           <div className="flex space-x-2">
@@ -408,10 +422,10 @@ export default function DrawPage() {
             />
             <button
               onClick={handleSendMessage}
-              disabled={!inputValue.trim() || isLoading}
+              disabled={!inputValue.trim() || isLoading || sessionLoading}
               className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Send
+              {sessionLoading ? 'Initializing...' : 'Send'}
             </button>
           </div>
         </div>

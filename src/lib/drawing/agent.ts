@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { excalidrawTool } from "./excalidrawTool";
+import { LearningRAGService } from "../rag/ragService";
 // Import broadcastDrawing dynamically to avoid circular dependency
 // import { broadcastDrawing } from "@/app/api/draw/ws/route";
 
@@ -22,6 +23,12 @@ const DrawingState = Annotation.Root({
   conversationContext: Annotation<string>({
     reducer: (x, y) => y || x || '',
   }),
+  ragContext: Annotation<string>({
+    reducer: (x, y) => y || x || '',
+  }),
+  userLearningHistory: Annotation<string>({
+    reducer: (x, y) => y || x || '',
+  }),
 });
 
 // Initialize the model with tools
@@ -30,6 +37,75 @@ const model = new ChatOpenAI({
   temperature: 0.1,
   apiKey: process.env.OPENAI_API_KEY,
 }).bindTools([excalidrawTool]);
+
+// RAG node - retrieves relevant learning context before agent processing
+async function ragNode(state: typeof DrawingState.State) {
+  console.log('🔍 RAG node called - retrieving learning context');
+  
+  const messages = state.messages;
+  const lastMessage = messages[messages.length - 1];
+  
+  if (!(lastMessage instanceof HumanMessage)) {
+    return { ragContext: '', userLearningHistory: '' };
+  }
+
+  try {
+    // Initialize RAG service with configuration
+    const ragConfig = {
+      vectorStore: {
+        provider: (process.env.VECTOR_STORE_PROVIDER as 'mongodb' | 'pinecone') || 'mongodb',
+        connectionString: process.env.MONGODB_CONNECTION_STRING,
+        indexName: process.env.VECTOR_INDEX_NAME || 'learning_vector_index',
+        apiKey: process.env.PINECONE_API_KEY,
+      },
+      embeddings: {
+        openaiApiKey: process.env.OPENAI_API_KEY!,
+      },
+    };
+
+    const ragService = await LearningRAGService.getInstance(ragConfig);
+    
+    // Extract topic from the message
+    const query = lastMessage.content.toString();
+    const topic = extractTopicFromQuery(query);
+    
+    // Get relevant context
+    const ragResult = await ragService.getRelevantContext(query, topic);
+    
+    console.log(`📚 Retrieved RAG context: ${ragResult.sources.length} sources, topic: ${topic}`);
+    
+    return {
+      ragContext: ragResult.relevantContext,
+      userLearningHistory: ragResult.userHistory ? JSON.stringify(ragResult.userHistory) : '',
+    };
+  } catch (error) {
+    console.error('❌ RAG retrieval failed:', error);
+    return { ragContext: '', userLearningHistory: '' };
+  }
+}
+
+// Extract topic from user query (simple implementation)
+function extractTopicFromQuery(query: string): string {
+  const lowerQuery = query.toLowerCase();
+  
+  // Common educational topics
+  const topics = [
+    'machine learning', 'data structures', 'algorithms', 'database', 'networking',
+    'programming', 'javascript', 'python', 'react', 'api', 'software engineering',
+    'computer science', 'mathematics', 'physics', 'chemistry', 'biology',
+    'photosynthesis', 'economics', 'business', 'marketing', 'design'
+  ];
+  
+  for (const topic of topics) {
+    if (lowerQuery.includes(topic)) {
+      return topic;
+    }
+  }
+  
+  // Default topic extraction
+  const words = query.split(' ').filter(word => word.length > 3);
+  return words[0] || 'General Learning';
+}
 
 // Agent node - handles conversation and decides when to use tools
 async function agentNode(state: typeof DrawingState.State) {
@@ -42,14 +118,18 @@ async function agentNode(state: typeof DrawingState.State) {
   console.log(`Total messages: ${messages.length}`);
   console.log(`Current elements in state: ${state.currentElements?.length || 0}`);
 
-  // Enhanced system prompt with context awareness
+  // Enhanced system prompt with context awareness and RAG
   let messagesToSend = messages;
   if (messages.length === 1 && messages[0] instanceof HumanMessage) {
     const currentElementsCount = state.currentElements?.length || 0;
     const conversationSummary = state.conversationContext || '';
     const canvasDescription = describeCanvasElements(state.currentElements || []);
+    const ragContext = state.ragContext || '';
+    const userHistory = state.userLearningHistory || '';
     
     console.log('🎨 Canvas description for AI:', canvasDescription);
+    console.log('📚 RAG context available:', ragContext.length > 0);
+    console.log('👤 User history available:', userHistory.length > 0);
     
     const systemPrompt = new AIMessage(`You are a Visual Learning Assistant - an intelligent teacher who explains concepts through interactive diagrams.
 
@@ -72,7 +152,23 @@ AGENTIC LEARNING FLOW:
 
 ${canvasDescription}
 
-SPATIAL INTELLIGENCE RULES:
+${ragContext ? `PREVIOUS LEARNING CONTEXT:
+The student has previous learning history and context about this topic:
+${ragContext}
+
+Use this context to:
+- Build upon concepts the student already knows
+- Reference previous diagrams or explanations when relevant  
+- Avoid repeating information already covered
+- Make connections to their learning journey
+- Adapt your teaching style to their demonstrated understanding level
+
+` : ''}${userHistory ? `STUDENT LEARNING PROFILE:
+${userHistory}
+
+Personalize your teaching approach based on their learning progress and interests.
+
+` : ''}SPATIAL INTELLIGENCE RULES:
 - Study the spatial map above to understand existing layout
 - Use the OPTIMAL AREAS suggested for placing new content
 - NEVER place elements in occupied regions
@@ -249,19 +345,67 @@ function shouldContinue(state: typeof DrawingState.State): string {
   return END;
 }
 
-// Build the graph
+// Storage node - saves the conversation to RAG after completion
+async function storageNode(state: typeof DrawingState.State) {
+  console.log('💾 Storage node called - saving to RAG');
+  
+  const messages = state.messages;
+  if (messages.length < 2) return {}; // Need at least user message and response
+  
+  try {
+    // Initialize RAG service
+    const ragConfig = {
+      vectorStore: {
+        provider: (process.env.VECTOR_STORE_PROVIDER as 'mongodb' | 'pinecone') || 'mongodb',
+        connectionString: process.env.MONGODB_CONNECTION_STRING,
+        indexName: process.env.VECTOR_INDEX_NAME || 'learning_vector_index',
+        apiKey: process.env.PINECONE_API_KEY,
+      },
+      embeddings: {
+        openaiApiKey: process.env.OPENAI_API_KEY!,
+      },
+    };
+
+    const ragService = await LearningRAGService.getInstance(ragConfig);
+    
+    // Find user message and assistant response
+    const userMessage = messages.find(m => m instanceof HumanMessage);
+    const assistantMessage = messages.find(m => m instanceof AIMessage && !m.tool_calls?.length);
+    
+    if (userMessage && assistantMessage) {
+      const question = userMessage.content.toString();
+      const answer = assistantMessage.content.toString();
+      const topic = extractTopicFromQuery(question);
+      const diagrams = state.currentElements;
+      
+      await ragService.storeConversation(question, answer, topic, diagrams);
+      console.log(`✅ Stored learning conversation for topic: ${topic}`);
+    }
+  } catch (error) {
+    console.error('❌ Failed to store conversation in RAG:', error);
+    // Don't throw - storage failure shouldn't break the flow
+  }
+  
+  return {};
+}
+
+// Build the graph with RAG integration
 const graph = new StateGraph(DrawingState)
+  .addNode('rag', ragNode)
   .addNode('agent', agentNode)
   .addNode('tools', toolNode)
-  .addEdge(START, 'agent')
+  .addNode('storage', storageNode)
+  .addEdge(START, 'rag')
+  .addEdge('rag', 'agent')
   .addConditionalEdges('agent', shouldContinue, {
     tools: 'tools',
-    [END]: END,
+    [END]: 'storage',
   })
   .addConditionalEdges('tools', shouldContinue, {
     agent: 'agent',
-    [END]: END,
-  });
+    [END]: 'storage',
+  })
+  .addEdge('storage', END);
 
 const compiledGraph = graph.compile();
 
@@ -739,6 +883,8 @@ export async function runDrawingAgent(
     iterations: 0,
     currentElements: currentCanvasElements, // Use real canvas state
     conversationContext: conversationSummary,
+    ragContext: '',
+    userLearningHistory: '',
   };
 
   try {
@@ -825,6 +971,8 @@ export async function streamDrawingAgent(
     iterations: 0,
     currentElements: currentCanvasElements, // Use real canvas state
     conversationContext: conversationSummary,
+    ragContext: '',
+    userLearningHistory: '',
   };
 
   try {

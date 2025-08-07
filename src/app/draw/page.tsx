@@ -2,6 +2,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import ExcalidrawWebSocketCanvas from '@/components/ExcalidrawWebSocketCanvas';
 import GlobalAudioControls from '@/components/GlobalAudioControls';
+import VoiceInterface from '@/components/VoiceInterface';
+import ConversationInterface from '@/components/ConversationInterface';
 import { useAgentTTS } from '@/hooks/useAgentTTS';
 import { useUserSession } from '@/hooks/useUserSession';
 
@@ -62,6 +64,7 @@ export default function DrawPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [autoTTS, setAutoTTS] = useState(false);
+  const [conversationMode, setConversationMode] = useState<'simple' | 'advanced'>('simple');
   
   // Use RAG-enabled user session
   const { userId, sessionId, isLoading: sessionLoading, startNewSession, clearUserData } = useUserSession();
@@ -71,7 +74,7 @@ export default function DrawPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   
   // TTS for learning assistant
-  const { speakAsLearningAssistant, speakEducationalResponse, startLearningSession, clearSpeech } = useAgentTTS();
+  const { speakAsLearningAssistant, speakEducationalResponse, streamEducationalResponse, startLearningSession, clearSpeech } = useAgentTTS();
 
   // Auto-scroll to bottom when messages update
   const scrollToBottom = useCallback(() => {
@@ -111,11 +114,13 @@ export default function DrawPage() {
     setCurrentCanvasElements(elements);
   }, []);
 
-  const handleSendMessage = useCallback(async () => {
-    if (!inputValue.trim() || isLoading) return;
+  const handleSendMessage = useCallback(async (message?: string) => {
+    const userMessage = message || inputValue.trim();
+    if (!userMessage || isLoading) return;
 
-    const userMessage = inputValue.trim();
-    setInputValue('');
+    if (!message) {
+      setInputValue('');
+    }
     
     // Clear any ongoing TTS when user sends new message
     clearSpeech();
@@ -163,9 +168,9 @@ export default function DrawPage() {
               if (data.type === 'message' && data.content) {
                 assistantMessage += data.content;
                 
-                // Speak educational response if auto-TTS is enabled
-                if (autoTTS && assistantMessage.length > 20) {
-                  speakEducationalResponse(assistantMessage);
+                // Use real-time TTS streaming for immediate response
+                if (autoTTS) {
+                  streamEducationalResponse(assistantMessage, false);
                 }
                 
                 // Update the last assistant message or create a new one
@@ -240,9 +245,15 @@ export default function DrawPage() {
       addMessage('assistant', 'Sorry, I encountered an error. Please try again.');
     } finally {
       setIsLoading(false);
+      
+      // Mark streaming as complete for TTS
+      if (autoTTS && assistantMessage) {
+        streamEducationalResponse(assistantMessage, true);
+      }
+      
       focusInput(); // Re-focus input after completion
     }
-  }, [inputValue, isLoading, sessionId, addMessage, clearSpeech, autoTTS, speakEducationalResponse, speakAsLearningAssistant]);
+  }, [inputValue, isLoading, sessionId, addMessage, clearSpeech, autoTTS, speakEducationalResponse, streamEducationalResponse, speakAsLearningAssistant]);
 
   const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -250,6 +261,82 @@ export default function DrawPage() {
       handleSendMessage();
     }
   }, [handleSendMessage]);
+
+  const handleVoiceMessage = useCallback((message: string) => {
+    handleSendMessage(message);
+  }, [handleSendMessage]);
+
+  // Handle streaming response for conversation interface
+  const handleConversationResponse = useCallback((response: string, isComplete: boolean) => {
+    if (conversationMode === 'simple') {
+      // Update the last assistant message or create new one
+      setMessages(prev => {
+        const lastMessage = prev[prev.length - 1];
+        let updated;
+        
+        if (lastMessage && lastMessage.type === 'assistant') {
+          updated = [
+            ...prev.slice(0, -1),
+            { ...lastMessage, content: response }
+          ];
+        } else {
+          updated = [...prev, {
+            id: Math.random().toString(36).substring(2, 15),
+            type: 'assistant' as const,
+            content: response,
+            timestamp: new Date()
+          }];
+        }
+        
+        if (isComplete) {
+          saveMessages(updated);
+        }
+        return updated;
+      });
+    }
+  }, [conversationMode]);
+
+  // Simple conversation handler for real-time voice mode
+  const handleConversationMessage = useCallback(async (message: string) => {
+    if (!message.trim() || isLoading) return;
+    
+    console.log('🎙️ Conversation message:', message);
+    
+    // Clear any ongoing TTS
+    clearSpeech();
+    
+    // Add user message
+    addMessage('user', message);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/draw/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message,
+          sessionId,
+          currentCanvasElements: currentCanvasElements || [],
+          conversationMode: 'voice' // Flag for more conversational responses
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      // Return response for the conversation hook to handle streaming
+      return response;
+
+    } catch (error) {
+      console.error('Conversation error:', error);
+      addMessage('assistant', 'Sorry, I encountered an error. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isLoading, sessionId, addMessage, clearSpeech, currentCanvasElements]);
 
   // Focus input on component mount and when loading changes
   useEffect(() => {
@@ -352,6 +439,53 @@ export default function DrawPage() {
           onLearningModeToggle={setAutoTTS}
         />
         
+        {/* Conversation Mode Toggle */}
+        <div className="p-4 border-b border-gray-200">
+          <div className="flex items-center gap-4 mb-4">
+            <span className="text-sm font-medium text-gray-700">Interaction Mode:</span>
+            <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+              <button
+                onClick={() => setConversationMode('simple')}
+                className={`px-4 py-2 text-sm font-medium ${
+                  conversationMode === 'simple'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                🎙️ Simple Voice
+              </button>
+              <button
+                onClick={() => setConversationMode('advanced')}
+                className={`px-4 py-2 text-sm font-medium ${
+                  conversationMode === 'advanced'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                🎛️ Advanced
+              </button>
+            </div>
+          </div>
+
+          {/* Conversation Interface for Simple Mode */}
+          {conversationMode === 'simple' && (
+            <ConversationInterface
+              onMessage={handleConversationMessage}
+              onResponse={handleConversationResponse}
+              className="w-full"
+            />
+          )}
+
+          {/* Voice Interface for Advanced Mode */}
+          {conversationMode === 'advanced' && (
+            <VoiceInterface 
+              onMessage={handleVoiceMessage}
+              isDisabled={isLoading || sessionLoading}
+              className="w-full"
+            />
+          )}
+        </div>
+        
         {/* Input */}
         <div className="p-4 border-t border-gray-200">
           <div className="flex space-x-2 mb-2">
@@ -421,7 +555,7 @@ export default function DrawPage() {
               autoFocus
             />
             <button
-              onClick={handleSendMessage}
+              onClick={() => handleSendMessage()}
               disabled={!inputValue.trim() || isLoading || sessionLoading}
               className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >

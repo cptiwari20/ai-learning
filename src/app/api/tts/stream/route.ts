@@ -25,41 +25,51 @@ export async function POST(request: NextRequest) {
       preview: text.substring(0, 100) + (text.length > 100 ? '...' : '')
     });
 
-    // Call OpenAI TTS API (OpenAI doesn't support true streaming, but we can return faster)
+    // Use tts-1 (faster) for real-time conversation, tts-1-hd for quality
+    const model = text.length > 200 ? "tts-1-hd" : "tts-1";
+    
+    console.log('🎵 Generating TTS with model:', model);
+    
+    // Call OpenAI TTS API with optimizations
     const mp3 = await openai.audio.speech.create({
-      model: "tts-1", // Use faster model for quicker generation
+      model: model,
       voice: voice as 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer',
       input: text,
       speed: speed,
+      response_format: "mp3", // MP3 is faster to generate than other formats
     });
 
     console.log('✅ TTS generated');
 
-    // Convert to buffer and create a streaming response
+    // Convert to buffer and create an optimized streaming response
     const buffer = Buffer.from(await mp3.arrayBuffer());
     
-    // Create a streaming response to start playback faster
+    // Create a streaming response optimized for real-time playback
     const stream = new ReadableStream({
       start(controller) {
-        // Send the audio in chunks for better perceived performance
-        const chunkSize = 1024 * 8; // 8KB chunks
+        // Use smaller chunks to start playback faster
+        const chunkSize = 1024 * 4; // 4KB chunks for faster initial response
         let offset = 0;
         
         const sendChunk = () => {
           if (offset >= buffer.length) {
             controller.close();
-            console.log('✅ TTS streaming completed');
+            console.log('✅ TTS streaming completed:', buffer.length, 'bytes');
             return;
           }
           
-          const chunk = buffer.slice(offset, offset + chunkSize);
-          controller.enqueue(chunk);
-          offset += chunkSize;
+          const remainingBytes = buffer.length - offset;
+          const currentChunkSize = Math.min(chunkSize, remainingBytes);
+          const chunk = buffer.slice(offset, offset + currentChunkSize);
           
-          // Send next chunk immediately (no delay for audio)
-          setTimeout(sendChunk, 0);
+          controller.enqueue(chunk);
+          offset += currentChunkSize;
+          
+          // Send chunks as fast as possible for lowest latency
+          setImmediate(sendChunk);
         };
         
+        // Start immediately
         sendChunk();
       }
     });

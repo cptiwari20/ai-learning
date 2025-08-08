@@ -68,6 +68,7 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, onCanvasStateUpda
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawImperativeAPI | null>(null);
   const pendingDrawingMessages = useRef<WSMessage[]>([]);
   const [persistentSessionId] = useState(getOrCreateSessionId);
+  const hasAutoFittedRef = useRef<boolean>(false);
   
   // WebSocket state
   const wsRef = useRef<WebSocket | null>(null);
@@ -137,19 +138,22 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, onCanvasStateUpda
                 }
               }, 100);
               
-              // Auto-fit the view to show all elements
-              setTimeout(() => {
-                if (excalidrawAPI && validElements.length > 0) {
-                  try {
-                    excalidrawAPI.scrollToContent(validElements, {
-                      fitToContent: true,
-                      animate: true
-                    });
-                  } catch (error) {
-                    console.warn('Failed to auto-fit view:', error);
+              // Auto-fit the view once after initial sync/drawing for smooth UX
+              if (!hasAutoFittedRef.current) {
+                setTimeout(() => {
+                  if (excalidrawAPI && validElements.length > 0) {
+                    try {
+                      excalidrawAPI.scrollToContent(validElements, {
+                        fitToContent: true,
+                        animate: false
+                      });
+                      hasAutoFittedRef.current = true;
+                    } catch (error) {
+                      console.warn('Failed to auto-fit view:', error);
+                    }
                   }
-                }
-              }, 1000);
+                }, 250);
+              }
             } catch (error) {
               console.error('Failed to update Excalidraw scene:', error);
             }
@@ -265,8 +269,9 @@ export default function ExcalidrawWebSocketCanvas({ onMessage, onCanvasStateUpda
         // Try multiple WebSocket connection strategies
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         
-        // Use standalone WebSocket server on port 8080
-        const wsUrl = `${protocol}//localhost:8080`;
+        // Use standalone WebSocket server on port 8080, same host as current page
+        const host = window.location.hostname;
+        const wsUrl = `${protocol}//${host}:8080`;
         
         // Test if WebSocket is supported
         if (typeof WebSocket === 'undefined') {

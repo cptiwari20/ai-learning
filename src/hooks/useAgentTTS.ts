@@ -9,7 +9,7 @@ interface LearningContext {
 }
 
 export function useAgentTTS() {
-  const { speak, speakStream, cancel, clearQueue, isPlaying, isLoading, queueLength } = useTTS();
+  const { speak, speakStream, cancel, clearQueue, isPlaying, isLoading, queueLength, unlockAudio } = useTTS();
   const lastSpokenRef = useRef<string>('');
   const speakTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const learningContextRef = useRef<LearningContext>({
@@ -162,6 +162,9 @@ export function useAgentTTS() {
       learningPhase: 'introduction'
     };
     
+    // best-effort unlock
+    unlockAudio();
+
     const introduction = `Hello! I'm your visual learning assistant. Today we'll explore ${topic} together. I'll create diagrams and explain each step so you can understand both the concepts and how to visualize them effectively.`;
     
     speak(introduction, {

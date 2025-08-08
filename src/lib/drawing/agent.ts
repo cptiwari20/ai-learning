@@ -419,20 +419,11 @@ const sessionContexts = new Map<string, {
 // Function to get current canvas state from WebSocket server
 async function getCurrentCanvasState(): Promise<unknown[]> {
   try {
-    // Ensure WebSocket server is initialized first
-    await fetch('/api/draw/ws', { method: 'GET' });
-    
-    const response = await fetch('/api/draw/ws', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'get_state' })
-    });
-    const result = await response.json();
-    
-    if (result.success && result.elements) {
-      console.log('📋 Retrieved current canvas state:', result.elements.length, 'elements');
-      return result.elements;
-    }
+    // Import directly from WS module to avoid server-side fetch URL issues
+    const { getCanvasState } = await import('@/app/api/draw/ws/route');
+    const elements = getCanvasState();
+    console.log('📋 Retrieved current canvas state (direct):', elements.length, 'elements');
+    return elements as unknown[];
   } catch (error) {
     console.warn('Failed to get canvas state:', error);
   }
@@ -904,12 +895,12 @@ export async function runDrawingAgent(
               allElements = toolResult.elements;
               
               // Broadcast to WebSocket clients
-              console.log('🚀 Broadcasting drawing elements via WebSocket (non-streaming):', toolResult.elements.length);
+              console.log('🚀 Adding drawing elements via WebSocket (non-streaming, append only):', toolResult.elements.length);
               try {
-                const { broadcastDrawing } = await import("@/app/api/draw/ws/route");
-                broadcastDrawing(toolResult.elements as unknown[], toolResult.message);
+                const { addDrawingElements } = await import("@/app/api/draw/ws/route");
+                addDrawingElements(toolResult.elements as unknown[], toolResult.message || 'Elements added');
               } catch (error) {
-                console.error('❌ Non-streaming WebSocket broadcast failed:', error);
+                console.error('❌ Non-streaming WebSocket add failed:', error);
               }
               
               onDrawingEvent(toolResult.elements, toolResult.message);
@@ -983,14 +974,12 @@ export async function streamDrawingAgent(
       console.log('🌊 Stream chunk received:', Object.keys(chunk));
       console.log('🌊 Chunk details:', JSON.stringify(chunk, null, 2));
 
-      // Handle agent responses - only show text if no tool calls are made
+      // Handle agent responses - stream text even when tools are being used
       if (chunk.agent) {
         const messages = chunk.agent.messages;
         for (const msg of messages) {
           if (msg instanceof AIMessage && typeof msg.content === 'string') {
-            // Only send text response if there are no tool calls (fallback case)
-            const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
-            if (!hasToolCalls && msg.content.trim()) {
+            if (msg.content.trim()) {
               onUpdate({ type: 'message', content: msg.content });
             }
           }
@@ -1012,15 +1001,15 @@ export async function streamDrawingAgent(
               
               if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
                 // Broadcast to WebSocket clients
-                console.log('🚀 ATTEMPTING WebSocket broadcast with', toolResult.elements.length, 'elements');
+                console.log('🚀 ATTEMPTING WebSocket append with', toolResult.elements.length, 'elements');
                 console.log('🚀 Elements to broadcast:', JSON.stringify(toolResult.elements, null, 2));
                 
                 try {
-                  console.log('🚀 Dynamically importing broadcastDrawing function...');
-                  const { broadcastDrawing } = await import("@/app/api/draw/ws/route");
-                  console.log('🚀 Calling broadcastDrawing function...');
-                  broadcastDrawing(toolResult.elements as unknown[], toolResult.message);
-                  console.log('✅ WebSocket broadcast function call completed');
+                  console.log('🚀 Dynamically importing addDrawingElements function...');
+                  const { addDrawingElements } = await import("@/app/api/draw/ws/route");
+                  console.log('🚀 Calling addDrawingElements function...');
+                  addDrawingElements(toolResult.elements as unknown[], toolResult.message || 'Elements added');
+                  console.log('✅ WebSocket append function call completed');
                 } catch (error) {
                   console.error('❌ WebSocket broadcast failed with error:', error);
                   console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');

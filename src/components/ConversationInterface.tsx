@@ -3,7 +3,7 @@ import React, { useState, useCallback } from 'react';
 import { useConversationMode, ConversationMode } from '@/hooks/useConversationMode';
 
 interface ConversationInterfaceProps {
-  onMessage: (message: string) => Promise<void> | void;
+  onMessage: (message: string) => Promise<Response | void> | Response | void;
   onResponse?: (response: string, isComplete: boolean) => void;
   className?: string;
 }

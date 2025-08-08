@@ -1,8 +1,8 @@
 'use client';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import ExcalidrawWebSocketCanvas from '@/components/ExcalidrawWebSocketCanvas';
-import GlobalAudioControls from '@/components/GlobalAudioControls';
-import VoiceInterface from '@/components/VoiceInterface';
+// import GlobalAudioControls from '@/components/GlobalAudioControls';
+// import VoiceInterface from '@/components/VoiceInterface';
 import ConversationInterface from '@/components/ConversationInterface';
 import { useAgentTTS } from '@/hooks/useAgentTTS';
 import { useUserSession } from '@/hooks/useUserSession';
@@ -14,18 +14,7 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-// Get or create persistent session ID
-const getSessionId = () => {
-  if (typeof window !== 'undefined') {
-    let sessionId = sessionStorage.getItem('draw-session-id');
-    if (!sessionId) {
-      sessionId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-      sessionStorage.setItem('draw-session-id', sessionId);
-    }
-    return sessionId;
-  }
-  return Math.random().toString(36).substring(2, 15);
-};
+// (removed unused local session util)
 
 // Load chat messages from localStorage
 const loadMessages = (): ChatMessage[] => {
@@ -33,11 +22,11 @@ const loadMessages = (): ChatMessage[] => {
     try {
       const stored = localStorage.getItem('draw-chat-messages');
       if (stored) {
-        const data = JSON.parse(stored);
+        const data = JSON.parse(stored) as ChatMessage[];
         // Convert timestamp strings back to Date objects
-        return data.map((msg: any) => ({
+        return data.map((msg) => ({
           ...msg,
-          timestamp: new Date(msg.timestamp)
+          timestamp: new Date((msg as unknown as { timestamp: string | number | Date }).timestamp)
         }));
       }
     } catch (error) {
@@ -63,8 +52,8 @@ export default function DrawPage() {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [autoTTS, setAutoTTS] = useState(false);
-  const [conversationMode, setConversationMode] = useState<'simple' | 'advanced'>('simple');
+  const [autoTTS] = useState(true);
+  const [conversationMode] = useState<'simple' | 'advanced'>('simple');
   
   // Use RAG-enabled user session
   const { userId, sessionId, isLoading: sessionLoading, startNewSession, clearUserData } = useUserSession();
@@ -74,7 +63,7 @@ export default function DrawPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   
   // TTS for learning assistant
-  const { speakAsLearningAssistant, speakEducationalResponse, streamEducationalResponse, startLearningSession, clearSpeech } = useAgentTTS();
+  const { speakAsLearningAssistant, streamEducationalResponse, clearSpeech } = useAgentTTS();
 
   // Auto-scroll to bottom when messages update
   const scrollToBottom = useCallback(() => {
@@ -104,6 +93,8 @@ export default function DrawPage() {
   }, [scrollToBottom]);
 
   const [currentCanvasElements, setCurrentCanvasElements] = useState<unknown[]>([]);
+  // Throttle persisting chat during streaming to avoid jank
+  const lastPersistTsRef = useRef<number>(0);
   
   const handleDrawingMessage = useCallback((message: string) => {
     addMessage('assistant', message);
@@ -128,6 +119,7 @@ export default function DrawPage() {
     addMessage('user', userMessage);
     setIsLoading(true);
 
+    let assistantMessage = '';
     try {
       const response = await fetch('/api/draw/chat', {
         method: 'POST',
@@ -151,7 +143,6 @@ export default function DrawPage() {
       }
 
       const decoder = new TextDecoder();
-      let assistantMessage = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -170,7 +161,8 @@ export default function DrawPage() {
                 
                 // Use real-time TTS streaming for immediate response
                 if (autoTTS) {
-                  streamEducationalResponse(assistantMessage, false);
+                  // Stream only the incremental chunk to avoid re-speaking accumulated text
+                  streamEducationalResponse(data.content, false);
                 }
                 
                 // Update the last assistant message or create a new one
@@ -190,7 +182,12 @@ export default function DrawPage() {
                       timestamp: new Date()
                     }];
                   }
-                  saveMessages(updated);
+                  // Persist at most once per second during streaming to keep UI smooth
+                  const now = Date.now();
+                  if (now - lastPersistTsRef.current > 1000) {
+                    saveMessages(updated);
+                    lastPersistTsRef.current = now;
+                  }
                   return updated;
                 });
               } else if (data.type === 'drawing' && data.elements) {
@@ -203,34 +200,8 @@ export default function DrawPage() {
                   speakAsLearningAssistant(data);
                 }
                 
-                // Skip adding technical drawing messages to chat
-                // User wants to focus on learning content, not drawing updates
-                
-                // Important: Directly broadcast to WebSocket for immediate drawing
-                if (data.elements && data.elements.length > 0) {
-                  console.log('🚀 Broadcasting drawing elements directly to WebSocket');
-                  
-                  // Use 'add' action to append elements instead of replacing
-                  fetch('/api/draw/ws', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      action: 'add', // Changed from 'broadcast' to 'add' for incremental updates
-                      elements: data.elements,
-                      message: data.message || 'Drawing updated'
-                    })
-                  }).then(response => response.json())
-                    .then(result => {
-                      console.log('✅ WebSocket broadcast result:', result);
-                      setIsDrawing(false);
-                      // Don't add drawing messages to chat - user doesn't want to see technical updates
-                    })
-                    .catch(error => {
-                      console.error('❌ WebSocket broadcast failed:', error);
-                      setIsDrawing(false);
-                      // Don't add error messages to chat - handle silently
-                    });
-                }
+                // Skip adding/broadcasting technical drawing messages from client.
+                // The backend already broadcasts via WebSocket; avoid duplicate updates.
               } else if (data.type === 'error') {
                 addMessage('assistant', data.content || 'An error occurred');
               }
@@ -253,7 +224,7 @@ export default function DrawPage() {
       
       focusInput(); // Re-focus input after completion
     }
-  }, [inputValue, isLoading, sessionId, addMessage, clearSpeech, autoTTS, speakEducationalResponse, streamEducationalResponse, speakAsLearningAssistant]);
+  }, [inputValue, isLoading, sessionId, addMessage, clearSpeech, autoTTS, streamEducationalResponse, speakAsLearningAssistant, currentCanvasElements, focusInput]);
 
   const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -262,9 +233,7 @@ export default function DrawPage() {
     }
   }, [handleSendMessage]);
 
-  const handleVoiceMessage = useCallback((message: string) => {
-    handleSendMessage(message);
-  }, [handleSendMessage]);
+  // Unified voice/text input via ConversationInterface
 
   // Handle streaming response for conversation interface
   const handleConversationResponse = useCallback((response: string, isComplete: boolean) => {
@@ -297,7 +266,7 @@ export default function DrawPage() {
   }, [conversationMode]);
 
   // Simple conversation handler for real-time voice mode
-  const handleConversationMessage = useCallback(async (message: string) => {
+  const handleConversationMessage = useCallback(async (message: string): Promise<Response | void> => {
     if (!message.trim() || isLoading) return;
     
     console.log('🎙️ Conversation message:', message);
@@ -327,7 +296,7 @@ export default function DrawPage() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Return response for the conversation hook to handle streaming
+      // Return response for the conversation hook to handle streaming and TTS
       return response;
 
     } catch (error) {
@@ -355,20 +324,10 @@ export default function DrawPage() {
       {/* Chat Panel */}
       <div className="w-1/3 bg-gray-50 border-r border-gray-200 flex flex-col">
         <div className="p-4 border-b border-gray-200">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-lg font-semibold text-gray-800">🎓 Visual Learning Assistant</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-800">🎓 Visual Learning</h2>
           </div>
-          <p className="text-sm text-gray-600">I'll teach you concepts through interactive visual diagrams!</p>
-          
-          <div className="mt-3 text-xs text-gray-500">
-            <p className="font-medium mb-1">Learning topics to explore:</p>
-            <ul className="space-y-1 text-xs">
-              <li>• "Explain how photosynthesis works"</li>
-              <li>• "Show me the software development process"</li>
-              <li>• "How does machine learning work?"</li>
-              <li>• "Teach me about database relationships"</li>
-            </ul>
-          </div>
+          <p className="text-xs text-gray-500 mt-1">Talk or type. I&apos;ll teach while drawing in real time.</p>
         </div>
         
         {/* Messages */}
@@ -376,9 +335,7 @@ export default function DrawPage() {
           {messages.length === 0 && (
             <div className="text-center text-gray-500 mt-8">
               <div className="text-4xl mb-3">🎓</div>
-              <p className="font-medium">Ready to learn together!</p>
-              <p className="text-sm mt-2">Ask me to explain any concept and I'll teach you through visual diagrams.</p>
-              <p className="text-xs mt-3 text-blue-600">💡 Tip: Enable "Learning mode" for voice explanation!</p>
+              <p className="text-sm">Ask anything. I&apos;ll explain and draw step-by-step.</p>
             </div>
           )}
           {messages.map((message) => (
@@ -433,57 +390,13 @@ export default function DrawPage() {
           <div ref={messagesEndRef} />
         </div>
         
-        {/* Global Audio Controls */}
-        <GlobalAudioControls 
-          isLearningMode={autoTTS}
-          onLearningModeToggle={setAutoTTS}
-        />
-        
-        {/* Conversation Mode Toggle */}
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex items-center gap-4 mb-4">
-            <span className="text-sm font-medium text-gray-700">Interaction Mode:</span>
-            <div className="flex rounded-lg border border-gray-300 overflow-hidden">
-              <button
-                onClick={() => setConversationMode('simple')}
-                className={`px-4 py-2 text-sm font-medium ${
-                  conversationMode === 'simple'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-white text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                🎙️ Simple Voice
-              </button>
-              <button
-                onClick={() => setConversationMode('advanced')}
-                className={`px-4 py-2 text-sm font-medium ${
-                  conversationMode === 'advanced'
-                    ? 'bg-blue-500 text-white'
-                    : 'bg-white text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                🎛️ Advanced
-              </button>
-            </div>
-          </div>
-
-          {/* Conversation Interface for Simple Mode */}
-          {conversationMode === 'simple' && (
-            <ConversationInterface
-              onMessage={handleConversationMessage}
-              onResponse={handleConversationResponse}
-              className="w-full"
-            />
-          )}
-
-          {/* Voice Interface for Advanced Mode */}
-          {conversationMode === 'advanced' && (
-            <VoiceInterface 
-              onMessage={handleVoiceMessage}
-              isDisabled={isLoading || sessionLoading}
-              className="w-full"
-            />
-          )}
+        {/* Voice Controls (simple) */}
+        <div className="p-3 border-b border-gray-200">
+          <ConversationInterface
+            onMessage={handleConversationMessage}
+            onResponse={handleConversationResponse}
+            className="w-full"
+          />
         </div>
         
         {/* Input */}

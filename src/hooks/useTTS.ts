@@ -264,6 +264,31 @@ export function useTTS() {
     setState(prev => ({ ...prev, isPlaying: false }));
   }, []);
 
+  // Attempt to unlock audio on user gesture for autoplay-restricted environments
+  const unlockAudio = useCallback(async () => {
+    try {
+      const AnyContext = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (AnyContext) {
+        const ctx = new AnyContext();
+        await ctx.resume();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0; // silent
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.01);
+      } else {
+        // Fallback: try to play a silent audio element
+        const el = new Audio();
+        el.src = 'data:audio/mp3;base64,'; // minimal data URI; some browsers will just resolve
+        await el.play().catch(() => {});
+      }
+      console.log('🔓 Audio context unlocked');
+    } catch (e) {
+      console.warn('Failed to unlock audio context:', e);
+    }
+  }, []);
+
   return {
     ...state,
     speak,
@@ -274,5 +299,6 @@ export function useTTS() {
     cancel,
     clearQueue,
     skipCurrent,
+    unlockAudio,
   };
 }

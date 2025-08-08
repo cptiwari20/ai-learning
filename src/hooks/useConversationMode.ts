@@ -25,7 +25,7 @@ export interface ConversationOptions {
 }
 
 export function useConversationMode(
-  onMessage: (message: string) => Promise<void> | void,
+  onMessage: (message: string) => Promise<Response | void> | Response | void,
   onResponse?: (response: string, isComplete: boolean) => void,
   options: ConversationOptions = {}
 ) {
@@ -117,8 +117,8 @@ export function useConversationMode(
       const result = await onMessage(transcript);
       
       // If onMessage returns a response (like a fetch response), handle streaming
-      if (result && typeof result.body?.getReader === 'function') {
-        await handleStreamingResponse(result);
+      if (result && typeof (result as Response).body?.getReader === 'function') {
+        await handleStreamingResponse(result as Response);
       }
     } catch (error) {
       console.error('Error processing message:', error);

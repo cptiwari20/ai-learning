@@ -1,11 +1,15 @@
 'use client';
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
 import ExcalidrawWebSocketCanvas from '@/components/ExcalidrawWebSocketCanvas';
 // import GlobalAudioControls from '@/components/GlobalAudioControls';
 // import VoiceInterface from '@/components/VoiceInterface';
 import ConversationInterface from '@/components/ConversationInterface';
+import LearningSessionControls from '@/components/LearningSessionControls';
+import LearningProgressIndicator from '@/components/LearningProgressIndicator';
 import { useAgentTTS } from '@/hooks/useAgentTTS';
-import { useUserSession } from '@/hooks/useUserSession';
+import Link from 'next/link';
 
 interface ChatMessage {
   id: string;
@@ -48,27 +52,63 @@ const saveMessages = (messages: ChatMessage[]) => {
 };
 
 export default function DrawPage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  
   const [messages, setMessages] = useState<ChatMessage[]>(loadMessages);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [autoTTS] = useState(true);
   const [conversationMode] = useState<'simple' | 'advanced'>('simple');
+  const [learningProgress, setLearningProgress] = useState<{
+    topic: string;
+    currentChunk: number;
+    totalChunks: number;
+    isActive: boolean;
+  }>({ topic: '', currentChunk: 0, totalChunks: 0, isActive: false });
   
-  // Use RAG-enabled user session
-  const { userId, sessionId, isLoading: sessionLoading, startNewSession, clearUserData } = useUserSession();
+  // Generate session ID for authenticated users
+  const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15));
   
   // Refs for auto-scroll and input focus
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   
   // TTS for learning assistant
-  const { speakAsLearningAssistant, streamEducationalResponse, clearSpeech } = useAgentTTS();
+  const { speakAsLearningAssistant, streamEducationalResponse, clearSpeech, resetInteractionTimer } = useAgentTTS();
+  
+  const [currentCanvasElements, setCurrentCanvasElements] = useState<unknown[]>([]);
+  // Throttle persisting chat during streaming to avoid jank
+  const lastPersistTsRef = useRef<number>(0);
 
   // Auto-scroll to bottom when messages update
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
+
+  // Save chat data to database periodically
+  const saveChatData = useCallback(async () => {
+    if (!session?.user?.id || messages.length === 0) return;
+
+    try {
+      await fetch('/api/chat/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId,
+          messages,
+          topic: learningProgress.topic,
+          canvasState: currentCanvasElements,
+          learningProgress,
+        }),
+      });
+    } catch (error) {
+      console.error('Failed to save chat data:', error);
+    }
+  }, [session?.user?.id, sessionId, messages, learningProgress, currentCanvasElements]);
 
   // Focus input after each interaction
   const focusInput = useCallback(() => {
@@ -92,10 +132,6 @@ export default function DrawPage() {
     setTimeout(scrollToBottom, 100);
   }, [scrollToBottom]);
 
-  const [currentCanvasElements, setCurrentCanvasElements] = useState<unknown[]>([]);
-  // Throttle persisting chat during streaming to avoid jank
-  const lastPersistTsRef = useRef<number>(0);
-  
   const handleDrawingMessage = useCallback((message: string) => {
     addMessage('assistant', message);
   }, [addMessage]);
@@ -113,8 +149,9 @@ export default function DrawPage() {
       setInputValue('');
     }
     
-    // Clear any ongoing TTS when user sends new message
+    // Clear any ongoing TTS when user sends new message and reset interaction timer
     clearSpeech();
+    resetInteractionTimer(); // Reset interaction prompts when user is active
     
     addMessage('user', userMessage);
     setIsLoading(true);
@@ -195,6 +232,16 @@ export default function DrawPage() {
                 console.log('🎨 Drawing event received:', data.elements?.length, 'elements');
                 setIsDrawing(true);
                 
+                // Update learning progress if available
+                if (data.learningProgress) {
+                  setLearningProgress({
+                    topic: data.learningProgress.topic || '',
+                    currentChunk: data.learningProgress.currentChunk || 0,
+                    totalChunks: data.learningProgress.totalChunks || 0,
+                    isActive: true
+                  });
+                }
+                
                 // Speak learning assistant narration if auto-TTS is enabled
                 if (autoTTS) {
                   speakAsLearningAssistant(data);
@@ -224,7 +271,7 @@ export default function DrawPage() {
       
       focusInput(); // Re-focus input after completion
     }
-  }, [inputValue, isLoading, sessionId, addMessage, clearSpeech, autoTTS, streamEducationalResponse, speakAsLearningAssistant, currentCanvasElements, focusInput]);
+  }, [inputValue, isLoading, sessionId, addMessage, clearSpeech, autoTTS, streamEducationalResponse, speakAsLearningAssistant, currentCanvasElements, focusInput, resetInteractionTimer]);
 
   const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -232,8 +279,6 @@ export default function DrawPage() {
       handleSendMessage();
     }
   }, [handleSendMessage]);
-
-  // Unified voice/text input via ConversationInterface
 
   // Handle streaming response for conversation interface
   const handleConversationResponse = useCallback((response: string, isComplete: boolean) => {
@@ -307,6 +352,29 @@ export default function DrawPage() {
     }
   }, [isLoading, sessionId, addMessage, clearSpeech, currentCanvasElements]);
 
+  // Redirect to sign in if not authenticated
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin?callbackUrl=' + encodeURIComponent('/draw'));
+    }
+  }, [status, router]);
+
+  // Auto-save chat data every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(saveChatData, 30000);
+    return () => clearInterval(interval);
+  }, [saveChatData]);
+
+  // Save on page unload
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveChatData();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [saveChatData]);
+
   // Focus input on component mount and when loading changes
   useEffect(() => {
     if (!isLoading) {
@@ -319,16 +387,60 @@ export default function DrawPage() {
     scrollToBottom();
   }, [scrollToBottom]);
 
+  // Loading state
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  // Not authenticated (will redirect via useEffect)
+  if (status === 'unauthenticated') {
+    return null;
+  }
+
   return (
-    <div className="flex h-screen">
-      {/* Chat Panel */}
-      <div className="w-1/3 bg-gray-50 border-r border-gray-200 flex flex-col">
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-800">🎓 Visual Learning</h2>
+    <div className="flex flex-col h-screen">
+      {/* Navigation Header */}
+      <header className="bg-white dark:bg-gray-800 shadow-sm border-b">
+        <div className="px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-12">
+            <div className="flex items-center space-x-4">
+              <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Visual Learning AI
+              </h1>
+              {learningProgress.isActive && (
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Learning: {learningProgress.topic}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center space-x-4">
+              <span className="text-sm text-gray-700 dark:text-gray-300">
+                {session?.user?.name || session?.user?.email}
+              </span>
+              <Link
+                href="/dashboard"
+                className="text-sm text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+              >
+                Dashboard
+              </Link>
+            </div>
           </div>
-          <p className="text-xs text-gray-500 mt-1">Talk or type. I&apos;ll teach while drawing in real time.</p>
         </div>
+      </header>
+
+      <div className="flex flex-1">
+        {/* Chat Panel */}
+        <div className="w-1/3 bg-gray-50 border-r border-gray-200 flex flex-col">
+          <div className="p-4 border-b border-gray-200">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-800">🎓 Visual Learning</h2>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Talk or type. I&apos;ll teach while drawing in real time.</p>
+          </div>
         
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -398,6 +510,22 @@ export default function DrawPage() {
             className="w-full"
           />
         </div>
+
+        {/* Learning Progress */}
+        <div className="p-3 border-b border-gray-200">
+          <LearningProgressIndicator 
+            topic={learningProgress.topic}
+            currentChunk={learningProgress.currentChunk}
+            totalChunks={learningProgress.totalChunks}
+            isActive={learningProgress.isActive}
+            className="w-full"
+          />
+        </div>
+
+        {/* Learning Session Controls */}
+        <div className="p-3 border-b border-gray-200">
+          <LearningSessionControls className="w-full" />
+        </div>
         
         {/* Input */}
         <div className="p-4 border-t border-gray-200">
@@ -428,8 +556,8 @@ export default function DrawPage() {
                 saveMessages([]);
                 setCurrentCanvasElements([]);
                 
-                // Clear RAG user data and create new session
-                clearUserData();
+                // Clear learning progress
+                setLearningProgress({ topic: '', currentChunk: 0, totalChunks: 0, isActive: false });
                 
                 // Clear all localStorage
                 if (typeof window !== 'undefined') {
@@ -437,17 +565,20 @@ export default function DrawPage() {
                   localStorage.removeItem('draw-chat-messages');
                 }
                 
-                console.log('🧹 All data cleared including RAG context');
+                console.log('🧹 All data cleared');
               }}
               className="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-sm"
             >
               🧹 Clear All
             </button>
             <div className="text-xs text-gray-500 flex items-center gap-2">
-              <span>User: {userId.substring(0, 8)}...</span>
+              <span>User: {session?.user?.id?.substring(0, 8)}...</span>
               <span>Session: {sessionId.substring(0, 8)}...</span>
               <button
-                onClick={() => startNewSession()}
+                onClick={() => {
+                  // Generate new session ID and clear state
+                  window.location.reload();
+                }}
                 className="px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-xs"
                 title="Start new learning session"
               >
@@ -469,25 +600,26 @@ export default function DrawPage() {
             />
             <button
               onClick={() => handleSendMessage()}
-              disabled={!inputValue.trim() || isLoading || sessionLoading}
+              disabled={!inputValue.trim() || isLoading}
               className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {sessionLoading ? 'Initializing...' : 'Send'}
+              Send
             </button>
           </div>
         </div>
       </div>
       
-      {/* Drawing Panel */}
-      <div className="flex-1 flex flex-col">
-        <div className="p-4 border-b border-gray-200">
-          <h1 className="text-xl font-semibold text-gray-800">Interactive Drawing Canvas</h1>
-        </div>
-        <div className="flex-1">
-          <ExcalidrawWebSocketCanvas 
-            onMessage={handleDrawingMessage}
-            onCanvasStateUpdate={handleCanvasStateUpdate}
-          />
+        {/* Drawing Panel */}
+        <div className="flex-1 flex flex-col">
+          <div className="p-4 border-b border-gray-200">
+            <h1 className="text-xl font-semibold text-gray-800">Interactive Drawing Canvas</h1>
+          </div>
+          <div className="flex-1">
+            <ExcalidrawWebSocketCanvas 
+              onMessage={handleDrawingMessage}
+              onCanvasStateUpdate={handleCanvasStateUpdate}
+            />
+          </div>
         </div>
       </div>
     </div>

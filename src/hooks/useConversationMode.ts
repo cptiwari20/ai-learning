@@ -101,6 +101,18 @@ export function useConversationMode(
     minPhraseLength
   ]);
 
+  // Avoid echo: pause mic while TTS is speaking; resume afterwards
+  useEffect(() => {
+    if (!state.isActive) return;
+    if (realtimeTTS.isPlaying) {
+      // Pause listening to avoid capturing TTS output
+      speechRecognition.abortListening();
+    } else if (state.mode === 'voice') {
+      // Resume listening after speech ends
+      speechRecognition.startListening().catch(() => {});
+    }
+  }, [realtimeTTS.isPlaying, state.isActive, state.mode, speechRecognition]);
+
   // Submit transcript
   const submitTranscript = useCallback(async (transcript: string) => {
     if (!transcript.trim() || transcript === lastSubmittedRef.current) return;
@@ -290,6 +302,21 @@ export function useConversationMode(
     }
   }, [state.mode, state.isSpeaking, realtimeTTS]);
 
+  // Mute/unmute TTS
+  const muteTTS = useCallback(() => {
+    realtimeTTS.mute();
+    console.log('🔇 Muted TTS in conversation mode');
+  }, [realtimeTTS]);
+
+  const unmuteTTS = useCallback(() => {
+    realtimeTTS.unmute();
+    console.log('🔊 Unmuted TTS in conversation mode');
+  }, [realtimeTTS]);
+
+  const toggleMuteTTS = useCallback(() => {
+    realtimeTTS.toggleMute();
+  }, [realtimeTTS]);
+
   // Cleanup
   useEffect(() => {
     return () => {
@@ -310,6 +337,12 @@ export function useConversationMode(
     stop,
     submitCurrentTranscript,
     interrupt,
+    
+    // TTS controls
+    muteTTS,
+    unmuteTTS,
+    toggleMuteTTS,
+    isTTSMuted: realtimeTTS.isMuted,
     
     // Response processing
     processStreamingResponse,

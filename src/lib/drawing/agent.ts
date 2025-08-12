@@ -3,6 +3,7 @@ import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from "@langchain/co
 import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { excalidrawTool } from "./excalidrawTool";
 import { LearningRAGService } from "../rag/ragService";
+import { createProgressiveLearningPrompt, calculateProgressivePosition } from "./progressiveLearning";
 // Import broadcastDrawing dynamically to avoid circular dependency
 // import { broadcastDrawing } from "@/app/api/draw/ws/route";
 
@@ -29,59 +30,31 @@ const DrawingState = Annotation.Root({
   userLearningHistory: Annotation<string>({
     reducer: (x, y) => y || x || '',
   }),
+  learningProgress: Annotation<{
+    topic: string;
+    currentChunk: number;
+    totalChunks: number;
+    lastUpdate: number;
+  }>({
+    reducer: (x, y) => y || x || { topic: '', currentChunk: 0, totalChunks: 0, lastUpdate: 0 },
+  }),
 });
 
-// Initialize the model with tools
+// Initialize the model with tools - use higher temperature for more tool usage
 const model = new ChatOpenAI({
-  modelName: "gpt-4o-mini",
-  temperature: 0.1,
+  modelName: "gpt-4o-mini", 
+  temperature: 0.3,
   apiKey: process.env.OPENAI_API_KEY,
 }).bindTools([excalidrawTool]);
 
 // RAG node - retrieves relevant learning context before agent processing
 async function ragNode(state: typeof DrawingState.State) {
-  console.log('🔍 RAG node called - retrieving learning context');
+  console.log('🔍 RAG node called - RAG retrieval temporarily disabled');
   
-  const messages = state.messages;
-  const lastMessage = messages[messages.length - 1];
-  
-  if (!(lastMessage instanceof HumanMessage)) {
-    return { ragContext: '', userLearningHistory: '' };
-  }
-
-  try {
-    // Initialize RAG service with configuration
-    const ragConfig = {
-      vectorStore: {
-        provider: (process.env.VECTOR_STORE_PROVIDER as 'mongodb' | 'pinecone') || 'mongodb',
-        connectionString: process.env.MONGODB_CONNECTION_STRING,
-        indexName: process.env.VECTOR_INDEX_NAME || 'learning_vector_index',
-        apiKey: process.env.PINECONE_API_KEY,
-      },
-      embeddings: {
-        openaiApiKey: process.env.OPENAI_API_KEY!,
-      },
-    };
-
-    const ragService = await LearningRAGService.getInstance(ragConfig);
-    
-    // Extract topic from the message
-    const query = lastMessage.content.toString();
-    const topic = extractTopicFromQuery(query);
-    
-    // Get relevant context
-    const ragResult = await ragService.getRelevantContext(query, topic);
-    
-    console.log(`📚 Retrieved RAG context: ${ragResult.sources.length} sources, topic: ${topic}`);
-    
-    return {
-      ragContext: ragResult.relevantContext,
-      userLearningHistory: ragResult.userHistory ? JSON.stringify(ragResult.userHistory) : '',
-    };
-  } catch (error) {
-    console.error('❌ RAG retrieval failed:', error);
-    return { ragContext: '', userLearningHistory: '' };
-  }
+  // TEMPORARILY DISABLE RAG RETRIEVAL to prevent MongoDB errors
+  // The learning experience will continue without historical context
+  console.log('💡 Continuing without RAG context - fresh learning session');
+  return { ragContext: '', userLearningHistory: '' };
 }
 
 // Extract topic from user query (simple implementation)
@@ -126,116 +99,93 @@ async function agentNode(state: typeof DrawingState.State) {
     const canvasDescription = describeCanvasElements(state.currentElements || []);
     const ragContext = state.ragContext || '';
     const userHistory = state.userLearningHistory || '';
+    const learningProgress = state.learningProgress || { topic: '', currentChunk: 0, totalChunks: 0, lastUpdate: 0 };
+    
+    // Detect if this is a new topic or continuation
+    const userMessage = messages[0] as HumanMessage;
+    const currentTopic = extractTopicFromQuery(userMessage.content.toString());
+    const isNewTopic = !learningProgress.topic || learningProgress.topic !== currentTopic;
+    const isProgressive = currentElementsCount > 0 && !isNewTopic;
     
     console.log('🎨 Canvas description for AI:', canvasDescription);
     console.log('📚 RAG context available:', ragContext.length > 0);
     console.log('👤 User history available:', userHistory.length > 0);
+    console.log('📈 Learning progress:', learningProgress);
+    console.log('🔄 Is progressive learning:', isProgressive);
     
-    const systemPrompt = new AIMessage(`You are a Visual Learning Assistant - an intelligent teacher who explains concepts through interactive diagrams.
+    // Create progressive learning context with enhanced step-by-step guidance
+    let progressiveContext = '';
+    if (isProgressive) {
+      const nextChunk = learningProgress.currentChunk + 1;
+      progressiveContext = `
+🎓 PROGRESSIVE LEARNING MODE - PART ${nextChunk}:
+You are continuing to teach "${learningProgress.topic}" step-by-step.
+Current canvas: ${currentElementsCount} elements already exist.
 
-🎓 CORE MISSION: Help students understand complex topics through visual learning, not just drawing
+CRITICAL PROGRESSIVE RULES:
+1. Add ONLY 1-2 NEW elements maximum per response
+2. Build logically upon what's already there - don't repeat existing concepts
+3. Explain WHY you're adding each element and HOW it connects to previous elements
+4. Use spatial positioning to show relationships (connect related concepts)
+5. After drawing, ask specific follow-up: "Next, should I show how [new concept] affects [existing concept]?"
 
-EDUCATIONAL TEACHING APPROACH:
-- First EXPLAIN the concept clearly in educational terms
-- Then CREATE visual diagrams that illustrate your explanation
-- Connect new concepts to what students already know
-- Use simple, clear language that builds understanding step by step
-- Ask thoughtful questions to encourage deeper thinking about the topic
+STEP-BY-STEP NARRATION FORMAT:
+- "Now let me add [specific element] to show [specific concept]..."
+- "I'm placing this [position] to demonstrate [relationship]..."
+- "This connects to our previous [element] because [reason]..."
+- "Next, we could explore [specific next step]. Shall I add that?"
 
-AGENTIC LEARNING FLOW:
-1. ANALYZE what the student wants to learn
-2. PLAN how to break it down into visual steps  
-3. EXPLAIN the key concepts clearly
-4. CREATE diagrams that reinforce your explanation
-5. CONNECT ideas to help students see relationships
-6. SUGGEST next learning steps or related topics
+PROGRESSIVE POSITIONING RULES:
+- Place new elements logically relative to existing ones (right for next steps, below for details, arrows for connections)
+- Use the progressive positioning algorithm from progressiveLearning.ts
+- Create visual flow that matches the learning progression
+`;
+    } else if (isNewTopic) {
+      progressiveContext = `
+🌟 NEW TOPIC LEARNING - FOUNDATION:
+Starting progressive learning for "${currentTopic}" from the beginning.
 
-${canvasDescription}
+FOUNDATION RULES:
+1. Create 1-2 foundational elements that represent core concepts
+2. Position them for future expansion (leave space for connections and details)
+3. Use clear, simple shapes with descriptive text
+4. Explain the fundamental concept before drawing
+5. End with specific suggestion: "Next, I can show you [specific aspect]. Would you like me to add that?"
 
-${ragContext ? `PREVIOUS LEARNING CONTEXT:
-The student has previous learning history and context about this topic:
-${ragContext}
+FOUNDATION NARRATION FORMAT:
+- "Let me start by introducing the core concept of [topic]..."
+- "I'll create [specific element] to represent [fundamental idea]..."
+- "This foundation will let us build [specific future elements]..."
+- "Should I now show you [next logical step]?"
+`;
+    }
+    
+    const systemPrompt = new AIMessage(`You are an educational visual learning assistant. The student asked about "${(messages[0] as HumanMessage).content}". 
 
-Use this context to:
-- Build upon concepts the student already knows
-- Reference previous diagrams or explanations when relevant  
-- Avoid repeating information already covered
-- Make connections to their learning journey
-- Adapt your teaching style to their demonstrated understanding level
+Your role is to:
+1. FIRST: Provide a clear, educational explanation about the topic
+2. THEN: Call the excalidraw_drawing tool to create a visual aid
 
-` : ''}${userHistory ? `STUDENT LEARNING PROFILE:
-${userHistory}
+Response format:
+- Start with educational content explaining the concept
+- Use simple, clear language appropriate for learning
+- Focus on key insights and understanding
+- Then silently call the drawing tool to add visual elements
 
-Personalize your teaching approach based on their learning progress and interests.
+Example response:
+"Photosynthesis is the amazing process plants use to make their own food! Plants take in sunlight, water, and carbon dioxide from the air, then convert these into glucose (sugar) and oxygen. This is why plants are so important - they literally create the oxygen we breathe while making food for themselves.
 
-` : ''}SPATIAL INTELLIGENCE RULES:
-- Study the spatial map above to understand existing layout
-- Use the OPTIMAL AREAS suggested for placing new content
-- NEVER place elements in occupied regions
-- Follow the spatial distribution patterns shown
-- If CONNECTION OPPORTUNITIES are suggested, CREATE THOSE ARROWS
-- Place new elements in empty regions or adjacent to existing content
+The process happens mainly in the leaves, where special cells called chloroplasts contain chlorophyll - the green substance that captures sunlight. It's like nature's solar panels!"
 
-ARROW CONNECTIVITY PRIORITY:
-- ALWAYS look for opportunities to connect related elements with arrows
-- Use draw_arrow to connect shapes that should be related
-- Create logical flow between elements (e.g., process steps, relationships)
-- Connect new elements to existing ones when it makes sense
-- Arrows should show direction of flow, relationships, or dependencies
+Then call excalidraw_drawing with action: "draw_circle" and text: "Photosynthesis Process"
 
-POSITIONING INTELLIGENCE:
-- The system provides specific optimal areas - USE THEM
-- Elements will be automatically positioned in suggested regions
-- Trust the spatial analysis to avoid overlaps
-- New content will be placed in empty regions first
-- Then adjacent to existing content with proper spacing
-
-CONTEXT AWARENESS:
-- Previous conversation: ${conversationSummary}
-- CRITICAL: ALWAYS ADD TO existing drawings, NEVER replace them
-- Each new request should ADD elements that complement existing ones
-- Build logically upon existing content with proper connections
-- If extending workflows, add connecting arrows between steps
-- If adding related concepts, connect them to existing elements
-- Use consistent colors and styling with existing elements
-
-ACTIONS TO USE (in order of preference):
-1. connect_elements - to connect existing elements with smart arrows (use exact fromElementIndex and toElementIndex from opportunities above)
-2. draw_rectangle, draw_circle, draw_diamond - for new content blocks
-3. draw_text - for labels and annotations  
-4. draw_arrow - for manual arrow positioning (when connect_elements isn't suitable)
-5. create_flowchart - for process sequences with built-in connections
-6. create_mindmap - for concept relationships with radial connections
-7. create_diagram - for structured layouts with connections
-
-LEARNING-FOCUSED ACTIONS:
-- Create educational diagrams that build understanding step by step
-- Use flowcharts to show processes and cause-and-effect relationships  
-- Use mind maps to show how concepts connect and relate to each other
-- Use simple shapes with clear labels to represent key ideas
-- Connect related concepts with arrows to show relationships
-
-EDUCATIONAL RESPONSE FORMAT:
-1. Start with clear explanation of the concept/topic (2-3 sentences)
-2. Then use tools to create supporting visual diagrams
-3. Explain what each visual element represents and why it matters
-4. Connect to broader learning goals or suggest next steps
-
-LEARNING-FOCUSED COMMUNICATION:
-- Focus on CONCEPTS and IDEAS, not drawing mechanics
-- Explain WHY things work this way, not just what you're drawing
-- Use teaching language: "Let's explore...", "This shows us...", "Notice how..."
-- Make connections to real-world applications
-- Encourage curiosity and deeper exploration
-
-Available tools: connect_elements, create_flowchart, create_mindmap, create_diagram, draw_rectangle, draw_circle, draw_line, draw_text, draw_arrow, draw_diamond, clear_canvas
-
-🎯 GOAL: Create an educational experience where students learn through visual understanding, not just see drawings being made.`);
+Canvas currently has ${currentElementsCount} elements. Focus on teaching the concept first, then add visual elements to support learning.`);
     
     messagesToSend = [systemPrompt, ...messages];
   }
 
   try {
+    // Allow the model to provide educational content and then use tools as needed
     const response = await model.invoke(messagesToSend);
     console.log(`Model response type: ${response.constructor.name}`);
     console.log(`Has tool calls: ${(response as AIMessage & { tool_calls?: unknown[] }).tool_calls?.length || 0}`);
@@ -243,9 +193,28 @@ Available tools: connect_elements, create_flowchart, create_mindmap, create_diag
     // Keep educational explanations - don't clear content for learning assistant
     // The user wants to learn the topic, so preserve the educational explanation
     
+    // Extract topic and determine if this is a new topic or continuation
+    const userMessage = messages.find(m => m instanceof HumanMessage);
+    const currentTopic = userMessage ? extractTopicFromQuery(userMessage.content.toString()) : 'General Learning';
+    const learningProgress = state.learningProgress || { topic: '', currentChunk: 0, totalChunks: 0, lastUpdate: 0 };
+    const isNewTopic = !learningProgress.topic || learningProgress.topic !== currentTopic;
+    
+    // Update learning progress
+    const newProgress = isNewTopic ? {
+      topic: currentTopic,
+      currentChunk: 1,
+      totalChunks: 5, // Default - could be made dynamic
+      lastUpdate: Date.now()
+    } : {
+      ...learningProgress,
+      currentChunk: Math.min(learningProgress.currentChunk + 1, learningProgress.totalChunks),
+      lastUpdate: Date.now()
+    };
+
     return {
       messages: [response],
-      iterations: 1
+      iterations: 1,
+      learningProgress: newProgress
     };
   } catch (error) {
     console.error('Error in agent node:', error);
@@ -276,10 +245,17 @@ async function toolNode(state: typeof DrawingState.State) {
     
     try {
       if (toolCall.name === 'excalidraw_drawing') {
-        // Add current canvas elements to tool args for smart positioning
+        // Always fetch the latest canvas state to avoid overlaps
+        const latestElements = await getCurrentCanvasState();
+        
+        // Get user context from the most recent human message
+        const userMessage = state.messages.find(m => m instanceof HumanMessage);
+        const userContext = userMessage ? userMessage.content.toString() : '';
+        
         const enhancedArgs = {
           ...toolCall.args,
-          existingElements: state.currentElements || []
+          existingElements: (latestElements || []) as unknown[],
+          userContext: userContext // Pass user context for focus positioning
         };
         
         const result = await excalidrawTool.invoke(enhancedArgs);
@@ -347,45 +323,11 @@ function shouldContinue(state: typeof DrawingState.State): string {
 
 // Storage node - saves the conversation to RAG after completion
 async function storageNode(state: typeof DrawingState.State) {
-  console.log('💾 Storage node called - saving to RAG');
+  console.log('💾 Storage node called - RAG storage temporarily disabled');
   
-  const messages = state.messages;
-  if (messages.length < 2) return {}; // Need at least user message and response
-  
-  try {
-    // Initialize RAG service
-    const ragConfig = {
-      vectorStore: {
-        provider: (process.env.VECTOR_STORE_PROVIDER as 'mongodb' | 'pinecone') || 'mongodb',
-        connectionString: process.env.MONGODB_CONNECTION_STRING,
-        indexName: process.env.VECTOR_INDEX_NAME || 'learning_vector_index',
-        apiKey: process.env.PINECONE_API_KEY,
-      },
-      embeddings: {
-        openaiApiKey: process.env.OPENAI_API_KEY!,
-      },
-    };
-
-    const ragService = await LearningRAGService.getInstance(ragConfig);
-    
-    // Find user message and assistant response
-    const userMessage = messages.find(m => m instanceof HumanMessage);
-    const assistantMessage = messages.find(m => m instanceof AIMessage && !m.tool_calls?.length);
-    
-    if (userMessage && assistantMessage) {
-      const question = userMessage.content.toString();
-      const answer = assistantMessage.content.toString();
-      const topic = extractTopicFromQuery(question);
-      const diagrams = state.currentElements;
-      
-      await ragService.storeConversation(question, answer, topic, diagrams);
-      console.log(`✅ Stored learning conversation for topic: ${topic}`);
-    }
-  } catch (error) {
-    console.error('❌ Failed to store conversation in RAG:', error);
-    // Don't throw - storage failure shouldn't break the flow
-  }
-  
+  // TEMPORARILY DISABLE RAG STORAGE to prevent MongoDB errors
+  // This ensures the learning experience is not interrupted
+  console.log('💡 Learning session completed successfully without storage');
   return {};
 }
 
@@ -674,18 +616,28 @@ function findOptimalAreasForNewContent(spatialMap: any): Array<{ x: number, y: n
 // Suggest connection opportunities between elements
 function suggestConnectionOpportunities(elements: any[]): Array<{ from: string, to: string, type: string, fromIndex: number, toIndex: number, action: string }> {
   const opportunities: Array<{ from: string, to: string, type: string, fromIndex: number, toIndex: number, action: string }> = [];
-  const shapes = elements.filter((el: any) => ['rectangle', 'ellipse', 'diamond'].includes(el.type));
   
-  // Create a map to find original indices
-  const shapeIndexMap = new Map();
-  shapes.forEach((shape, shapeIndex) => {
-    const originalIndex = elements.findIndex(el => el === shape);
-    shapeIndexMap.set(shapeIndex, originalIndex);
+  // Filter to only valid, connectable elements first
+  const validElements = elements.filter((el: any) => 
+    el && el.type && typeof el.x === 'number' && typeof el.y === 'number'
+  );
+  
+  const shapes = validElements.filter((el: any) => ['rectangle', 'ellipse', 'diamond'].includes(el.type));
+  
+  console.log('🔗 Connection analysis:', {
+    totalElements: elements.length,
+    validElements: validElements.length,
+    connectableShapes: shapes.length
   });
+  
+  if (shapes.length < 2) {
+    console.log('🔗 Not enough shapes for connections');
+    return [];
+  }
   
   // Check if elements are already connected by existing arrows
   const existingConnections = new Set();
-  const arrows = elements.filter((el: any) => el.type === 'arrow');
+  const arrows = validElements.filter((el: any) => el.type === 'arrow');
   
   arrows.forEach((arrow: any) => {
     // Find which elements this arrow connects
@@ -724,16 +676,24 @@ function suggestConnectionOpportunities(elements: any[]): Array<{ from: string, 
       if (horizontallyAligned || verticallyAligned) {
         const distance = Math.sqrt(Math.pow(el1.x - el2.x, 2) + Math.pow(el1.y - el2.y, 2));
         if (distance > 100 && distance < 500) { // Good distance for connection
-          const originalFromIndex = shapeIndexMap.get(i);
-          const originalToIndex = shapeIndexMap.get(j);
+          // Use indices within the validElements array, not the original elements array
+          const validFromIndex = validElements.indexOf(el1);
+          const validToIndex = validElements.indexOf(el2);
+          
+          console.log('🔗 Found connection opportunity:', {
+            from: validFromIndex,
+            to: validToIndex,
+            fromElement: el1.text || el1.type,
+            toElement: el2.text || el2.type
+          });
           
           opportunities.push({
             from: el1.text || `${el1.type} at (${Math.round(el1.x)}, ${Math.round(el1.y)})`,
             to: el2.text || `${el2.type} at (${Math.round(el2.x)}, ${Math.round(el2.y)})`,
             type: horizontallyAligned ? 'horizontal arrow' : 'vertical arrow',
-            fromIndex: originalFromIndex,
-            toIndex: originalToIndex,
-            action: `connect_elements with fromElementIndex: ${originalFromIndex}, toElementIndex: ${originalToIndex}`
+            fromIndex: validFromIndex,
+            toIndex: validToIndex,
+            action: `connect_elements with fromElementIndex: ${validFromIndex}, toElementIndex: ${validToIndex}`
           });
         }
       }
@@ -876,6 +836,7 @@ export async function runDrawingAgent(
     conversationContext: conversationSummary,
     ragContext: '',
     userLearningHistory: '',
+    learningProgress: { topic: '', currentChunk: 0, totalChunks: 0, lastUpdate: 0 },
   };
 
   try {
@@ -891,19 +852,21 @@ export async function runDrawingAgent(
           try {
             const toolResult = JSON.parse(msg.content) as { success: boolean; elements?: unknown[]; message: string };
             if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
-              // Update all elements for context persistence
-              allElements = toolResult.elements;
+              // APPEND new elements instead of replacing all elements
+              const newElements = toolResult.elements as unknown[];
+              allElements = [...allElements, ...newElements]; // Append, don't replace
               
-              // Broadcast to WebSocket clients
-              console.log('🚀 Adding drawing elements via WebSocket (non-streaming, append only):', toolResult.elements.length);
+              // Broadcast ONLY the new elements to WebSocket clients (append mode)
+              console.log('🚀 Adding NEW drawing elements via WebSocket (append only):', newElements.length);
               try {
                 const { addDrawingElements } = await import("@/app/api/draw/ws/route");
-                addDrawingElements(toolResult.elements as unknown[], toolResult.message || 'Elements added');
+                addDrawingElements(newElements, toolResult.message || 'Elements added');
               } catch (error) {
                 console.error('❌ Non-streaming WebSocket add failed:', error);
               }
               
-              onDrawingEvent(toolResult.elements, toolResult.message);
+              // Send only new elements to callback (frontend will append) - no message to avoid chat clutter
+              onDrawingEvent(newElements, '');
             }
           } catch (e) {
             console.warn('Failed to parse tool result:', e);
@@ -964,6 +927,7 @@ export async function streamDrawingAgent(
     conversationContext: conversationSummary,
     ragContext: '',
     userLearningHistory: '',
+    learningProgress: { topic: '', currentChunk: 0, totalChunks: 0, lastUpdate: 0 },
   };
 
   try {
@@ -974,13 +938,22 @@ export async function streamDrawingAgent(
       console.log('🌊 Stream chunk received:', Object.keys(chunk));
       console.log('🌊 Chunk details:', JSON.stringify(chunk, null, 2));
 
-      // Handle agent responses - stream text even when tools are being used
+      // Handle agent responses - stream text IMMEDIATELY, don't wait for tools
       if (chunk.agent) {
         const messages = chunk.agent.messages;
         for (const msg of messages) {
           if (msg instanceof AIMessage && typeof msg.content === 'string') {
             if (msg.content.trim()) {
-              onUpdate({ type: 'message', content: msg.content });
+              // Send message immediately for continuous narration
+              onUpdate({ 
+                type: 'message', 
+                content: msg.content,
+                syncData: {
+                  timestamp: Date.now(),
+                  shouldNarrate: true,
+                  priority: 'immediate' // High priority for continuous flow
+                }
+              });
             }
           }
         }
@@ -1000,44 +973,61 @@ export async function streamDrawingAgent(
               console.log('🔍 Tool result:', { success: toolResult.success, elementsCount: toolResult.elements?.length || 0, message: toolResult.message });
               
               if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
-                // Broadcast to WebSocket clients
-                console.log('🚀 ATTEMPTING WebSocket append with', toolResult.elements.length, 'elements');
-                console.log('🚀 Elements to broadcast:', JSON.stringify(toolResult.elements, null, 2));
+                // APPEND new elements to existing canvas state
+                const newElements = toolResult.elements as unknown[];
+                allElements = [...allElements, ...newElements]; // Append, don't replace
+                
+                // Broadcast ONLY new elements to WebSocket clients
+                console.log('🚀 ATTEMPTING WebSocket append with', newElements.length, 'NEW elements');
+                console.log('🚀 New elements to broadcast:', JSON.stringify(newElements, null, 2));
                 
                 try {
                   console.log('🚀 Dynamically importing addDrawingElements function...');
                   const { addDrawingElements } = await import("@/app/api/draw/ws/route");
-                  console.log('🚀 Calling addDrawingElements function...');
-                  addDrawingElements(toolResult.elements as unknown[], toolResult.message || 'Elements added');
+                  console.log('🚀 Calling addDrawingElements function with NEW elements...');
+                  addDrawingElements(newElements, toolResult.message || 'Elements added');
                   console.log('✅ WebSocket append function call completed');
                 } catch (error) {
                   console.error('❌ WebSocket broadcast failed with error:', error);
                   console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
                 }
-              } else {
-                console.log('⚠️ Not broadcasting - conditions not met:', {
-                  success: toolResult.success,
-                  hasElements: !!toolResult.elements,
-                  elementsLength: toolResult.elements?.length || 0
-                });
-              }
-              
-              // Always send the update regardless of broadcast success
-              if (toolResult.success && toolResult.elements && toolResult.elements.length > 0) {
-                // Update all elements for context persistence
-                allElements = toolResult.elements;
                 
-                onUpdate({
+                // Update learning progress for progressive building
+                const currentProgress = chunk.tools?.learningProgress || 
+                  initialState.learningProgress || { 
+                    topic: extractTopicFromQuery(message), 
+                    currentChunk: 0, 
+                    totalChunks: 5, 
+                    lastUpdate: Date.now() 
+                  };
+                
+                // Increment progress when adding elements
+                const newProgress = {
+                  ...currentProgress,
+                  currentChunk: Math.min(currentProgress.currentChunk + 1, currentProgress.totalChunks),
+                  lastUpdate: Date.now()
+                };
+                
+                // Create synchronized drawing event with NEW elements only
+                const drawingEvent = {
                   type: 'drawing',
-                  elements: toolResult.elements,
-                  message: '✨ Drawing updated'
-                });
+                  elements: newElements, // Send only new elements
+                  message: '', // Don't send technical drawing messages to chat
+                  learningProgress: newProgress,
+                  // Add sync info for voice coordination  
+                  syncData: {
+                    timestamp: Date.now(),
+                    action: toolResult.action || 'unknown',
+                    elementCount: newElements.length,
+                    shouldNarrate: false // Don't narrate technical drawing actions
+                  }
+                };
+                
+                onUpdate(drawingEvent);
               } else if (toolResult.success) {
-                // Send brief message for actions like clear_canvas
-                onUpdate({
-                  type: 'message',
-                  content: toolResult.message === 'Canvas cleared' ? '🧹 Canvas cleared' : '✅ Action completed'
-                });
+                // For non-drawing actions, don't send messages to chat
+                // The educational content should come from the AI's main response, not tool results
+                console.log('🔧 Tool action completed:', toolResult.message);
               }
             } catch (e) {
               console.warn('Failed to parse tool result in stream:', e);

@@ -13,6 +13,8 @@ export interface TTSState {
   error: string | null;
   currentText: string | null;
   queueLength: number;
+  isMuted: boolean;
+  currentSpeed: number;
 }
 
 interface TTSQueueItem {
@@ -30,6 +32,8 @@ export function useTTS() {
     error: null,
     currentText: null,
     queueLength: 0,
+    isMuted: false,
+    currentSpeed: 0.9, // Default learning speed
   });
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -44,7 +48,7 @@ export function useTTS() {
   }, []);
 
   const processQueue = useCallback(async () => {
-    if (processingRef.current || queueRef.current.length === 0) {
+    if (processingRef.current || queueRef.current.length === 0 || state.isMuted) {
       return;
     }
 
@@ -73,7 +77,7 @@ export function useTTS() {
             body: JSON.stringify({ 
               text: item.text, 
               voice: item.options.voice || 'alloy', 
-              speed: item.options.speed || 1.0 
+              speed: item.options.speed || state.currentSpeed 
             })
           });
 
@@ -89,7 +93,7 @@ export function useTTS() {
           }
         }
 
-        // Create and play audio
+        // Create and play audio (enforce sequential playback)
         const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
         audioRef.current = audio;
@@ -116,14 +120,27 @@ export function useTTS() {
             reject(error);
           };
 
-          if (item.options.autoPlay !== false) {
-            audio.play().catch(error => {
-              console.warn('Autoplay failed, will try later:', error);
-              // Don't reject, just continue
-              resolve();
-            });
-          } else {
+          // Always wait for playback to start; if autoplay fails, retry once after a user-gesture unlock
+          const startPlayback = () => audio.play().catch(async error => {
+            console.warn('Autoplay failed, attempting unlock:', error);
+            try {
+              const AnyContext = (window as any).AudioContext || (window as any).webkitAudioContext;
+              if (AnyContext) {
+                const ctx = new AnyContext();
+                await ctx.resume();
+              }
+            } catch {}
+            // Try play again (do not reject)
+            audio.play().catch(() => {});
+            // Continue regardless to avoid blocking queue
             resolve();
+          });
+
+          if (item.options.autoPlay === false) {
+            // Not auto-playing, resolve immediately
+            resolve();
+          } else {
+            startPlayback();
           }
         });
 
@@ -157,7 +174,7 @@ export function useTTS() {
   const speak = useCallback((text: string, options: TTSOptions = {}) => {
     const { priority = 'normal', ...restOptions } = options;
     
-    if (!text.trim()) return;
+    if (!text.trim() || state.isMuted) return;
 
     const queueItem: TTSQueueItem = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
@@ -217,11 +234,15 @@ export function useTTS() {
   }, [state.isPlaying]);
 
   const stop = useCallback(() => {
+    // Stop current audio playback
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
-      setState(prev => ({ ...prev, isPlaying: false }));
+      audioRef.current = null;
     }
+    // Force state update
+    setState(prev => ({ ...prev, isPlaying: false, isLoading: false }));
+    console.log('🛑 Audio stopped');
   }, []);
 
   const clearQueue = useCallback(() => {
@@ -231,6 +252,8 @@ export function useTTS() {
   }, [updateQueueLength]);
 
   const cancel = useCallback(() => {
+    console.log('🚫 Cancelling all TTS activity');
+    
     // Cancel any ongoing request
     if (currentRequestRef.current) {
       currentRequestRef.current.abort();
@@ -240,20 +263,25 @@ export function useTTS() {
     // Stop any playing audio
     if (audioRef.current) {
       audioRef.current.pause();
+      audioRef.current.currentTime = 0;
       audioRef.current = null;
     }
 
-    // Clear queue
+    // Clear queue and stop processing
     clearQueue();
     processingRef.current = false;
 
-    setState({
+    // Reset all state
+    setState(prev => ({
+      ...prev,
       isLoading: false,
       isPlaying: false,
       error: null,
       currentText: null,
       queueLength: 0,
-    });
+    }));
+    
+    console.log('✅ All TTS activity cancelled');
   }, [clearQueue]);
 
   const skipCurrent = useCallback(() => {
@@ -263,6 +291,54 @@ export function useTTS() {
     }
     setState(prev => ({ ...prev, isPlaying: false }));
   }, []);
+
+  // Mute/unmute functionality
+  const mute = useCallback(() => {
+    setState(prev => ({ ...prev, isMuted: true }));
+    // Stop current playback if any
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    // Clear queue when muting
+    clearQueue();
+    console.log('🔇 TTS muted');
+  }, [clearQueue]);
+
+  const unmute = useCallback(() => {
+    setState(prev => ({ ...prev, isMuted: false }));
+    console.log('🔊 TTS unmuted');
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    if (state.isMuted) {
+      unmute();
+    } else {
+      mute();
+    }
+  }, [state.isMuted, mute, unmute]);
+
+  // Speed control functionality
+  const setSpeed = useCallback((speed: number) => {
+    // Clamp speed between 0.25 and 2.0
+    const clampedSpeed = Math.max(0.25, Math.min(2.0, speed));
+    setState(prev => ({ ...prev, currentSpeed: clampedSpeed }));
+    console.log('🏃 TTS speed set to:', clampedSpeed);
+  }, []);
+
+  const increaseSpeed = useCallback(() => {
+    const newSpeed = Math.min(2.0, state.currentSpeed + 0.1);
+    setSpeed(newSpeed);
+  }, [state.currentSpeed, setSpeed]);
+
+  const decreaseSpeed = useCallback(() => {
+    const newSpeed = Math.max(0.25, state.currentSpeed - 0.1);
+    setSpeed(newSpeed);
+  }, [state.currentSpeed, setSpeed]);
+
+  const resetSpeed = useCallback(() => {
+    setSpeed(0.9); // Reset to default learning speed
+  }, [setSpeed]);
 
   // Attempt to unlock audio on user gesture for autoplay-restricted environments
   const unlockAudio = useCallback(async () => {
@@ -300,5 +376,12 @@ export function useTTS() {
     clearQueue,
     skipCurrent,
     unlockAudio,
+    mute,
+    unmute,
+    toggleMute,
+    setSpeed,
+    increaseSpeed,
+    decreaseSpeed,
+    resetSpeed,
   };
 }

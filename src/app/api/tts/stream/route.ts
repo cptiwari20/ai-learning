@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       start(controller) {
         // Use smaller chunks to start playback faster
-        const chunkSize = 1024 * 4; // 4KB chunks for faster initial response
+        const chunkSize = 1024; // 1KB chunks for minimal initial latency
         let offset = 0;
         
         const sendChunk = () => {

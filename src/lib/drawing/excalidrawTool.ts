@@ -1,17 +1,76 @@
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/types';
+import { calculateProgressivePosition, DiagramElementSpec } from "./progressiveLearning";
+// Define a minimal ExcalidrawElement type locally to avoid build-time type resolution issues
+export interface ExcalidrawElement {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  text?: string;
+  strokeColor?: string;
+  backgroundColor?: string;
+  fillStyle?: 'solid' | 'hachure' | 'cross-hatch' | 'zigzag' | 'dashed' | 'dotted' | 'zigzag-line';
+  strokeWidth?: number;
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
+  roughness?: number;
+  opacity?: number;
+  angle?: number;
+  roundness?: { type: number } | null;
+  seed?: number;
+  version?: number;
+  versionNonce?: number;
+  isDeleted?: boolean;
+  boundElements?: unknown;
+  updated?: number;
+  link?: string | null;
+  locked?: boolean;
+  groupIds?: string[];
+  frameId?: string | null;
+  customData?: unknown;
+  points?: [number, number][];
+  lastCommittedPoint?: unknown;
+  startBinding?: unknown;
+  endBinding?: unknown;
+  startArrowhead?: 'arrow' | 'triangle' | 'dot' | null;
+  endArrowhead?: 'arrow' | 'triangle' | 'dot' | null;
+  baseline?: number;
+  fontSize?: number;
+  fontFamily?: number;
+  textAlign?: 'left' | 'center' | 'right';
+  verticalAlign?: 'top' | 'middle' | 'bottom';
+  autoResize?: boolean;
+}
 
 // Generate unique ID for Excalidraw elements
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
-// Human-like intelligent positioning that understands context and flow
-function getSmartPosition(existingElements: ExcalidrawElement[], width = 100, height = 100, context?: string): { x: number; y: number } {
+// Human-like intelligent positioning that understands context and flow with progressive learning support
+function getSmartPosition(existingElements: ExcalidrawElement[], width = 100, height = 100, context?: string, elementSpec?: DiagramElementSpec): { x: number; y: number } {
   if (!existingElements || existingElements.length === 0) {
     // Empty canvas - start from upper-left area, not center (more natural)
     return { x: 150, y: 150 };
+  }
+
+  // If we have element spec with progressive positioning info, use that first
+  if (elementSpec && (elementSpec.relativeTo || elementSpec.direction)) {
+    try {
+      const progressivePos = calculateProgressivePosition(existingElements, elementSpec);
+      console.log('📚 Using progressive positioning:', progressivePos, 'for element relative to:', elementSpec.relativeTo);
+      return progressivePos;
+    } catch (error) {
+      console.warn('Progressive positioning failed, falling back to smart positioning:', error);
+    }
+  }
+
+  // If context suggests focusing on a specific element, try to position near it
+  const focusElement = findFocusElementFromContext(existingElements, context);
+  if (focusElement) {
+    return getPositionNearElement(focusElement, existingElements, width, height);
   }
 
   // Analyze existing elements for patterns and relationships
@@ -22,7 +81,8 @@ function getSmartPosition(existingElements: ExcalidrawElement[], width = 100, he
   console.log('🎯 Finding smart position for new element:', {
     existingElementsCount: elements.length,
     newElementSize: `${width}x${height}`,
-    context
+    context,
+    hasElementSpec: !!elementSpec
   });
 
   // Calculate occupied areas to avoid overlaps
@@ -42,23 +102,70 @@ function getSmartPosition(existingElements: ExcalidrawElement[], width = 100, he
   return bestPosition;
 }
 
-// Find optimal position using spatial region analysis
+// Find optimal position using spatial region analysis with sequential flow
 function findOptimalPosition(occupiedAreas: Array<{x: number, y: number, width: number, height: number, right: number, bottom: number}>, width: number, height: number): { x: number; y: number } {
   const canvasWidth = 1400;
   const canvasHeight = 1000;
-  const regionWidth = 350; // 4x4 grid
-  const regionHeight = 250;
+  const regionWidth = 320; // Slightly smaller regions for more granular control
+  const regionHeight = 200;
   const padding = 60;
 
-  console.log('🗺️ Finding position using spatial region analysis');
+  console.log('🗺️ Finding position using spatial region analysis with sequential flow');
 
-  // Create occupancy map of regions
-  const regionOccupancy: boolean[][] = Array(4).fill(null).map(() => Array(4).fill(false));
+  // If no occupied areas, start from top-left (not center)
+  if (occupiedAreas.length === 0) {
+    return { x: 100, y: 100 };
+  }
+
+  // For sequential flow, try to position to the right of the last element first
+  const lastElement = occupiedAreas[occupiedAreas.length - 1];
+  const rightOfLast = {
+    x: lastElement.right + padding,
+    y: lastElement.y
+  };
+
+  // Check if there's space to the right
+  if (rightOfLast.x + width <= canvasWidth - 50) {
+    const overlaps = occupiedAreas.some(area => {
+      return !(rightOfLast.x > area.right + 20 || 
+              rightOfLast.x + width < area.x - 20 || 
+              rightOfLast.y > area.bottom + 20 || 
+              rightOfLast.y + height < area.y - 20);
+    });
+    
+    if (!overlaps) {
+      console.log('✅ Sequential positioning to the right:', rightOfLast);
+      return rightOfLast;
+    }
+  }
+
+  // If no space to the right, try below the first element in current row
+  const belowLast = {
+    x: 100, // Start new row from left margin
+    y: lastElement.bottom + padding
+  };
+
+  if (belowLast.y + height <= canvasHeight - 50) {
+    const overlaps = occupiedAreas.some(area => {
+      return !(belowLast.x > area.right + 20 || 
+              belowLast.x + width < area.x - 20 || 
+              belowLast.y > area.bottom + 20 || 
+              belowLast.y + height < area.y - 20);
+    });
+    
+    if (!overlaps) {
+      console.log('✅ Sequential positioning below (new row):', belowLast);
+      return belowLast;
+    }
+  }
+
+  // Create occupancy map of regions for fallback
+  const regionOccupancy: boolean[][] = Array(5).fill(null).map(() => Array(5).fill(false));
   
   occupiedAreas.forEach(area => {
     const regionCol = Math.floor(area.x / regionWidth);
     const regionRow = Math.floor(area.y / regionHeight);
-    if (regionRow >= 0 && regionRow < 4 && regionCol >= 0 && regionCol < 4) {
+    if (regionRow >= 0 && regionRow < 5 && regionCol >= 0 && regionCol < 5) {
       regionOccupancy[regionRow][regionCol] = true;
     }
   });
@@ -66,8 +173,8 @@ function findOptimalPosition(occupiedAreas: Array<{x: number, y: number, width: 
   console.log('🗺️ Region occupancy map:', regionOccupancy);
 
   // Find first empty region (reading order: left-to-right, top-to-bottom)
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 4; col++) {
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 5; col++) {
       if (!regionOccupancy[row][col]) {
         const position = {
           x: col * regionWidth + 50,
@@ -140,6 +247,122 @@ function findOptimalPosition(occupiedAreas: Array<{x: number, y: number, width: 
   
   console.log('🚨 Using final fallback position:', { x: fallbackX, y: fallbackY });
   return { x: fallbackX, y: fallbackY };
+}
+
+// Find element that user might be focusing on based on context
+function findFocusElementFromContext(elements: ExcalidrawElement[], context?: string): ExcalidrawElement | null {
+  if (!context || !elements.length) return null;
+  
+  const lowerContext = context.toLowerCase();
+  console.log('🎯 Analyzing context for focus element:', context);
+  
+  // Look for keywords that might reference specific elements
+  const focusKeywords = [
+    'this', 'that', 'here', 'there', 'above', 'below', 'left', 'right',
+    'first', 'last', 'previous', 'next', 'main', 'central', 'center',
+    'explain more', 'tell me about', 'what about', 'focus on', 'expand on'
+  ];
+  
+  // Check if context contains focus-related language
+  const hasFocusLanguage = focusKeywords.some(keyword => lowerContext.includes(keyword));
+  
+  if (hasFocusLanguage) {
+    // Try to find the most relevant element based on text content
+    const textElements = elements.filter(el => el.type === 'text' && el.text);
+    
+    // Look for text elements that match words in the context
+    const contextWords = lowerContext.split(/\s+/).filter(word => word.length > 2);
+    
+    for (const textEl of textElements) {
+      const textWords = (textEl.text || '').toLowerCase().split(/\s+/);
+      const commonWords = contextWords.filter(word => 
+        textWords.some(textWord => textWord.includes(word) || word.includes(textWord))
+      );
+      
+      if (commonWords.length > 0) {
+        console.log('🎯 Found focus element by text match:', textEl.text);
+        return textEl;
+      }
+    }
+    
+    // If no text match, find the most recently added element (likely what user is referring to)
+    const sortedByPosition = [...elements].sort((a, b) => {
+      // Sort by position (bottom-right elements are likely more recent)
+      const aPos = (a.x || 0) + (a.y || 0);
+      const bPos = (b.x || 0) + (b.y || 0);
+      return bPos - aPos;
+    });
+    
+    console.log('🎯 Using most recent element as focus:', sortedByPosition[0]?.type);
+    return sortedByPosition[0] || null;
+  }
+  
+  return null;
+}
+
+// Get position near a specific element
+function getPositionNearElement(focusElement: ExcalidrawElement, allElements: ExcalidrawElement[], width: number, height: number): { x: number; y: number } {
+  const padding = 80;
+  const focusX = focusElement.x!;
+  const focusY = focusElement.y!;
+  const focusWidth = focusElement.width || 100;
+  const focusHeight = focusElement.height || 100;
+  
+  console.log('🎯 Positioning near focus element at:', { x: focusX, y: focusY });
+  
+  // Try different positions around the focus element
+  const candidatePositions = [
+    // Right of focus element
+    { x: focusX + focusWidth + padding, y: focusY, priority: 1 },
+    // Below focus element
+    { x: focusX, y: focusY + focusHeight + padding, priority: 2 },
+    // Left of focus element (if there's space)
+    { x: focusX - width - padding, y: focusY, priority: 3 },
+    // Above focus element (if there's space)
+    { x: focusX, y: focusY - height - padding, priority: 4 },
+    // Diagonal positions
+    { x: focusX + focusWidth + padding, y: focusY + focusHeight + padding, priority: 5 },
+    { x: focusX - width - padding, y: focusY + focusHeight + padding, priority: 6 }
+  ];
+  
+  // Check each position for overlaps with existing elements
+  for (const candidate of candidatePositions.sort((a, b) => a.priority - b.priority)) {
+    if (candidate.x < 50 || candidate.y < 50) continue; // Too close to edge
+    
+    const overlaps = allElements.some(el => {
+      if (el === focusElement) return false; // Don't check against focus element
+      
+      const elRight = el.x! + (el.width || 100);
+      const elBottom = el.y! + (el.height || 100);
+      const candRight = candidate.x + width;
+      const candBottom = candidate.y + height;
+      
+      return !(candidate.x > elRight + 20 || 
+              candRight < el.x! - 20 || 
+              candidate.y > elBottom + 20 || 
+              candBottom < el.y! - 20);
+    });
+    
+    if (!overlaps) {
+      console.log('🎯 Found good position near focus:', candidate);
+      return { x: candidate.x, y: candidate.y };
+    }
+  }
+  
+  // Fallback: use default smart positioning
+  console.log('🎯 No good position near focus, using default smart positioning');
+  return findOptimalPosition(
+    allElements.map(el => ({
+      x: el.x!,
+      y: el.y!,
+      width: el.width || 100,
+      height: el.height || 100,
+      right: el.x! + (el.width || 100),
+      bottom: el.y! + (el.height || 100)
+    })),
+    width,
+    height
+  );
 }
 
 // Find natural continuation points based on diagram flow and human logic
@@ -462,8 +685,21 @@ function createExcalidrawElement(
 
     case 'text':
       const textContent = text || 'Sample text';
-      const textWidth = Math.max(textContent.length * (fontSize * 0.6), 50);
-      const textHeight = fontSize * 1.5; // Increased for better visibility
+      // Better text size calculation considering line wrapping and multi-line text
+      const lines = textContent.split('\n');
+      const maxLineLength = Math.max(...lines.map(line => line.length));
+      const numLines = lines.length;
+      
+      // Dynamic width based on content with minimum and maximum bounds
+      const charWidth = fontSize * 0.65; // Slightly more accurate character width
+      const minWidth = 80;
+      const maxWidth = 400; // Prevent overly wide text boxes
+      const calculatedWidth = Math.max(minWidth, Math.min(maxWidth, maxLineLength * charWidth));
+      
+      // Dynamic height based on number of lines and font size
+      const lineHeight = fontSize * 1.3;
+      const textHeight = numLines * lineHeight + fontSize * 0.4; // Extra padding
+      
       return {
         ...baseElement,
         type: 'text',
@@ -475,10 +711,10 @@ function createExcalidrawElement(
         containerId: null,
         originalText: textContent,
         autoResize: true,
-        width: textWidth,
+        width: calculatedWidth,
         height: textHeight,
-        baseline: fontSize * 0.8, // Better baseline calculation
-        lineHeight: 1.25, // Added line height for better text spacing
+        baseline: fontSize * 0.8,
+        lineHeight: 1.3,
       } as ExcalidrawElement;
 
     case 'freedraw':
@@ -632,6 +868,18 @@ function createMindMapElements(options: {
   return elements;
 }
 
+// Determine if we should auto-connect new elements to existing ones
+function shouldAutoConnect(existingElements: ExcalidrawElement[]): boolean {
+  if (existingElements.length === 0) return false;
+  
+  // Auto-connect if we have shapes that could form a logical sequence
+  const shapes = existingElements.filter(el => ['rectangle', 'ellipse', 'diamond'].includes(el.type));
+  const arrows = existingElements.filter(el => el.type === 'arrow');
+  
+  // If we have shapes but few arrows, it might be a good time to connect
+  return shapes.length > 0 && arrows.length < shapes.length;
+}
+
 // Create smart arrow connecting two elements at their optimal connection points
 function createSmartArrow(fromElement: ExcalidrawElement, toElement: ExcalidrawElement, color = '#1971c2'): ExcalidrawElement {
   // Calculate centers of both elements
@@ -744,6 +992,7 @@ export const excalidrawTool = tool(
     fromElementIndex?: number; // Index of element to connect from
     toElementIndex?: number; // Index of element to connect to
     existingElements?: ExcalidrawElement[]; // Add existing elements for smart positioning
+    userContext?: string; // User's message context for focus positioning
   }) => {
     const {
       action,
@@ -764,12 +1013,31 @@ export const excalidrawTool = tool(
       centralTopic,
       fromElementIndex,
       toElementIndex,
-      existingElements = []
+      existingElements = [],
+      userContext
     } = input;
 
-    // Use smart positioning if x,y not provided
+    // Estimate footprint for composite diagrams to avoid overlap
+    let effectiveWidth = width;
+    let effectiveHeight = height;
+
+    if (action === 'create_flowchart') {
+      const stepsCount = (steps && steps.length ? steps.length : 4);
+      effectiveWidth = Math.max(220, width || 220);
+      effectiveHeight = (title ? 60 : 0) + stepsCount * 120 + 40; // rough height incl. padding
+    } else if (action === 'create_mindmap') {
+      const branchCount = (branches && branches.length ? branches.length : 4);
+      const radius = 200;
+      effectiveWidth = Math.max(2 * (radius + 140), width || 680);
+      effectiveHeight = Math.max(2 * (radius + 140), height || 680);
+    } else if (action === 'create_diagram') {
+      effectiveWidth = Math.max(420, width || 420);
+      effectiveHeight = Math.max(140, height || 140);
+    }
+
+    // Use smart positioning if x,y not provided, based on estimated footprint
     const smartPos = (x === undefined || y === undefined) ? 
-      getSmartPosition(existingElements, width, height) : 
+      getSmartPosition(existingElements, effectiveWidth, effectiveHeight, userContext) : 
       { x: x || 100, y: y || 100 };
     
     const finalX = x !== undefined ? x : smartPos.x;
@@ -787,7 +1055,17 @@ export const excalidrawTool = tool(
             x: finalX, y: finalY, width, height, strokeColor: color, backgroundColor, strokeWidth
           });
           elements = [rectangle];
-          message = `Drew a rectangle at (${finalX}, ${finalY}) with size ${width}x${height}`;
+          
+          // Auto-connect to previous element if it makes sense
+          if (existingElements.length > 0 && shouldAutoConnect(existingElements)) {
+            const lastElement = existingElements[existingElements.length - 1];
+            if (lastElement.type !== 'arrow' && lastElement.type !== 'line') {
+              const connectionArrow = createSmartArrow(lastElement, rectangle, color);
+              elements.unshift(connectionArrow);
+            }
+          }
+          
+          message = ``; // Silent drawing action
           break;
 
         case 'draw_circle':
@@ -795,7 +1073,17 @@ export const excalidrawTool = tool(
             x: finalX, y: finalY, width: width, height: width, strokeColor: color, backgroundColor, strokeWidth
           });
           elements = [circle];
-          message = `Drew a circle at (${finalX}, ${finalY}) with radius ${width/2}`;
+          
+          // Auto-connect to previous element if it makes sense
+          if (existingElements.length > 0 && shouldAutoConnect(existingElements)) {
+            const lastElement = existingElements[existingElements.length - 1];
+            if (lastElement.type !== 'arrow' && lastElement.type !== 'line') {
+              const connectionArrow = createSmartArrow(lastElement, circle, color);
+              elements.unshift(connectionArrow);
+            }
+          }
+          
+          message = ``; // Silent drawing action
           break;
 
         case 'draw_diamond':
@@ -803,7 +1091,17 @@ export const excalidrawTool = tool(
             x: finalX, y: finalY, width, height, strokeColor: color, backgroundColor, strokeWidth
           });
           elements = [diamond];
-          message = `Drew a diamond at (${finalX}, ${finalY}) with size ${width}x${height}`;
+          
+          // Auto-connect to previous element if it makes sense  
+          if (existingElements.length > 0 && shouldAutoConnect(existingElements)) {
+            const lastElement = existingElements[existingElements.length - 1];
+            if (lastElement.type !== 'arrow' && lastElement.type !== 'line') {
+              const connectionArrow = createSmartArrow(lastElement, diamond, color);
+              elements.unshift(connectionArrow);
+            }
+          }
+          
+          message = ``; // Silent drawing action
           break;
 
         case 'draw_line':
@@ -813,7 +1111,7 @@ export const excalidrawTool = tool(
           elements = [line];
           const endPosX = endX || finalX + width;
           const endPosY = endY || finalY;
-          message = `Drew a line from (${finalX}, ${finalY}) to (${endPosX}, ${endPosY})`;
+          message = ``; // Silent drawing action
           break;
 
         case 'draw_arrow':
@@ -823,7 +1121,7 @@ export const excalidrawTool = tool(
           elements = [arrow];
           const arrowEndX = endX || finalX + width;
           const arrowEndY = endY || finalY;
-          message = `Drew an arrow from (${finalX}, ${finalY}) to (${arrowEndX}, ${arrowEndY})`;
+          message = ``; // Silent drawing action
           break;
 
         case 'draw_text':
@@ -834,7 +1132,7 @@ export const excalidrawTool = tool(
             x: finalX, y: finalY, text, strokeColor: color, fontSize
           });
           elements = [textElement];
-          message = `Added text "${text}" at (${finalX}, ${finalY})`;
+          message = ``; // Silent drawing action
           break;
 
         case 'create_flowchart':
@@ -844,7 +1142,14 @@ export const excalidrawTool = tool(
             title: title || 'Process Flow',
             steps: steps || ['Start', 'Process', 'Decision', 'End']
           });
-          message = `Created a flowchart with ${elements.length} elements at (${finalX}, ${finalY})`;
+          // Auto-connect to previous element if exists
+          if (existingElements.length > 0 && elements.length > 0) {
+            const anchor = existingElements[existingElements.length - 1];
+            const first = elements.find(el => el.type === 'rectangle') || elements[0];
+            const connectionArrow = createSmartArrow(anchor, first, color);
+            elements.unshift(connectionArrow);
+          }
+          message = ``; // Silent drawing action
           break;
 
         case 'create_mindmap':
@@ -854,7 +1159,14 @@ export const excalidrawTool = tool(
             centralTopic: centralTopic || title || 'Central Topic',
             branches: branches || ['Idea 1', 'Idea 2', 'Idea 3', 'Idea 4']
           });
-          message = `Created a mind map with central topic "${centralTopic || title || 'Central Topic'}" and ${branches?.length || 4} branches at (${finalX}, ${finalY})`;
+          // Auto-connect to previous element if exists
+          if (existingElements.length > 0 && elements.length > 0) {
+            const anchor = existingElements[existingElements.length - 1];
+            const centerNode = elements.find(el => el.type === 'ellipse') || elements[0];
+            const connectionArrow = createSmartArrow(anchor, centerNode, color);
+            elements.unshift(connectionArrow);
+          }
+          message = ``; // Silent drawing action
           break;
 
         case 'create_diagram':
@@ -877,19 +1189,67 @@ export const excalidrawTool = tool(
             })
           ];
           elements = diagramElements;
-          message = `Created a basic diagram with connected components`;
+          message = ``; // Silent drawing action
           break;
 
         case 'connect_elements':
+          console.log('🔗 Connect elements requested:', {
+            fromElementIndex,
+            toElementIndex,
+            existingElementsCount: existingElements.length,
+            existingElementTypes: existingElements.map((el: any) => el?.type).slice(0, 10),
+            validElements: existingElements.filter((el: any) => 
+              el && el.type && typeof el.x === 'number' && typeof el.y === 'number'
+            ).length
+          });
+          
+          // Filter out invalid elements first
+          const validElements = existingElements.filter((el: any) => 
+            el && el.type && typeof el.x === 'number' && typeof el.y === 'number'
+          );
+          
+          console.log('🔗 Valid elements for connection:', {
+            total: validElements.length,
+            types: validElements.map((el: any) => ({ type: el.type, text: el.text || 'no text' }))
+          });
+          
           if (fromElementIndex !== undefined && toElementIndex !== undefined && 
-              fromElementIndex < existingElements.length && toElementIndex < existingElements.length) {
-            const fromElement = existingElements[fromElementIndex];
-            const toElement = existingElements[toElementIndex];
-            const connectingArrow = createSmartArrow(fromElement, toElement, color);
-            elements = [connectingArrow];
-            message = `Connected element ${fromElementIndex + 1} to element ${toElementIndex + 1}`;
+              fromElementIndex >= 0 && toElementIndex >= 0 &&
+              fromElementIndex < validElements.length && toElementIndex < validElements.length &&
+              fromElementIndex !== toElementIndex) {
+            
+            const fromElement = validElements[fromElementIndex];
+            const toElement = validElements[toElementIndex];
+            
+            console.log('🔗 Attempting to connect:', {
+              from: { type: fromElement.type, text: fromElement.text, pos: `(${fromElement.x}, ${fromElement.y})` },
+              to: { type: toElement.type, text: toElement.text, pos: `(${toElement.x}, ${toElement.y})` }
+            });
+            
+            try {
+              const connectingArrow = createSmartArrow(fromElement, toElement, color);
+              elements = [connectingArrow];
+              message = ``; // Silent connection action
+              console.log('✅ Connection created successfully');
+            } catch (error) {
+              console.error('❌ Error creating connection:', error);
+              elements = [];
+              message = `Failed to create connection: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            }
           } else {
-            throw new Error('Invalid element indices for connection');
+            console.warn('🚫 Invalid connection parameters:', {
+              fromElementIndex,
+              toElementIndex,
+              validElementsCount: validElements.length,
+              totalElementsCount: existingElements.length,
+              sameElement: fromElementIndex === toElementIndex,
+              indexInBounds: {
+                from: fromElementIndex !== undefined && fromElementIndex >= 0 && fromElementIndex < validElements.length,
+                to: toElementIndex !== undefined && toElementIndex >= 0 && toElementIndex < validElements.length
+              }
+            });
+            elements = [];
+            message = `Cannot connect elements - invalid indices (from: ${fromElementIndex}, to: ${toElementIndex}, valid elements available: 0-${validElements.length - 1})`;
           }
           break;
 
@@ -906,7 +1266,14 @@ export const excalidrawTool = tool(
         success: true,
         message,
         elements,
-        action
+        action,
+        // Add metadata for better synchronization
+        metadata: {
+          timestamp: Date.now(),
+          elementTypes: elements.map(el => (el as any).type).filter(Boolean),
+          totalElements: elements.length,
+          position: elements.length > 0 ? { x: (elements[0] as any).x, y: (elements[0] as any).y } : null
+        }
       };
 
       console.log('Excalidraw tool result:', result);

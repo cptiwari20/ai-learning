@@ -104,6 +104,48 @@ An intelligent drawing agent that creates visual diagrams and illustrations usin
 
 ---
 
+## Learning Journey Story: Human-like, Voice-first Visual Teaching
+
+Goal: Make the visual learning experience feel like a real teacher — clear, stepwise, interactive, and continuously visualized.
+
+Scenario: “Teach me English grammar.”
+
+1) Warm-up and intent
+- Agent briefly frames the topic: what is “English” and what is “grammar”.
+- As it speaks, it places 1–2 key terms on the canvas (e.g., “English”, “Grammar”), connected with a simple arrow.
+- It asks: “Would you like to focus on English as a language, or on grammar?”
+
+2) Learner choice and focus
+- Learner selects “Grammar”. The agent zooms toward the “Grammar” region and highlights it.
+- The agent speaks the core definition (short and clear) while adding a concise text box: “Grammar = rules for structure and meaning”.
+- Minimal visual noise; only what is currently being explained is added.
+
+3) High-level map
+- The agent places a high-level node: “Parts of Speech”. Draws a parent node “Grammar” → child node “Parts of Speech”.
+- It asks for readiness: “Shall we explore parts of speech?”
+
+4) Step-by-step exploration
+- On “Yes”, it adds subnodes: “Noun”, “Pronoun”, “Verb”, “Adjective”, “Adverb”, “Preposition”, “Conjunction”, “Interjection”.
+- It speaks about one at a time (e.g., “Noun”) and adds a short definition directly on the canvas under the “Noun” node.
+- The agent avoids dumping all content at once: it appends incrementally, synchronized with speech.
+
+5) Continuous, append-only drawing
+- The canvas never resets or replaces existing content. Each step appends new elements only.
+- The viewport remains stable, auto-fit only initially; zooms only when focusing a subtopic.
+
+6) Checkpoints and interjections
+- At the end of a subtopic, the agent asks a quick check question or offers to continue.
+- The learner can interject with questions anytime; the agent pauses listening while speaking to avoid echo, then resumes.
+
+7) Expanding depth on demand
+- If the learner asks for examples, the agent adds example bullets near the current node and speaks them.
+- Connections (arrows) show relationships (e.g., modifiers, agreement), reinforcing the explanation.
+
+Principles
+- Speak and draw in parallel: voice streaming with incremental, sentence-level audio; drawing updates append-only.
+- Spatial clarity: smart placement avoids overlap and uses consistent spacing.
+- Simplicity: minimal UI, focus on clarity, and continuous context in one canvas.
+
 ## Key Features
 
 ### ✅ Working Features

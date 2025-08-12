@@ -9,7 +9,26 @@ interface LearningContext {
 }
 
 export function useAgentTTS() {
-  const { speak, speakStream, cancel, clearQueue, isPlaying, isLoading, queueLength, unlockAudio } = useTTS();
+  const { 
+    speak, 
+    speakStream, 
+    cancel, 
+    clearQueue, 
+    stop,
+    isPlaying, 
+    isLoading, 
+    queueLength, 
+    unlockAudio, 
+    mute, 
+    unmute, 
+    toggleMute, 
+    isMuted,
+    currentSpeed,
+    setSpeed,
+    increaseSpeed,
+    decreaseSpeed,
+    resetSpeed
+  } = useTTS();
   const lastSpokenRef = useRef<string>('');
   const speakTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const learningContextRef = useRef<LearningContext>({
@@ -17,6 +36,8 @@ export function useAgentTTS() {
     learningPhase: 'introduction'
   });
   const processingStreamRef = useRef<boolean>(false);
+  const interactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastInteractionRef = useRef<number>(Date.now());
 
   // Generate educational narration focused on the topic, not technical events
   const generateEducationalNarration = useCallback((data: { type: string; content?: string; elements?: unknown[]; message?: string }): string | null => {
@@ -91,19 +112,24 @@ export function useAgentTTS() {
       return;
     }
 
-    console.log('🌊 Streaming TTS for chunk:', educationalText.substring(0, 50) + '...');
-    
-    speakStream(educationalText, { 
-      voice: 'fable',
-      speed: 0.9, // Faster for conversation flow
-      autoPlay: true,
-      priority: 'high'
+    // Prefer smaller, immediate playback chunks for lower latency.
+    // Split by sentence boundary or short segment.
+    const segments = educationalText.split(/(?<=[.!?])\s+/).filter(Boolean);
+    segments.forEach((seg, idx) => {
+      const trimmed = seg.trim();
+      if (!trimmed) return;
+      speakStream(trimmed, {
+        voice: 'fable',
+        speed: 0.95,
+        autoPlay: true,
+        priority: idx === 0 ? 'high' : 'normal'
+      });
     });
 
     if (isComplete) {
       processingStreamRef.current = false;
     } else {
-      setTimeout(() => { processingStreamRef.current = false; }, 500);
+      setTimeout(() => { processingStreamRef.current = false; }, 150);
     }
   }, [generateEducationalResponse, speakStream]);
 
@@ -179,11 +205,17 @@ export function useAgentTTS() {
       clearTimeout(speakTimeoutRef.current);
       speakTimeoutRef.current = null;
     }
-    cancel();
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+      interactionTimeoutRef.current = null;
+    }
+    stop(); // Stop current audio
+    cancel(); // Cancel requests  
+    clearQueue(); // Clear queue
     processingStreamRef.current = false;
     lastSpokenRef.current = '';
     console.log('🗑️ Cleared all TTS speech and queue');
-  }, [cancel]);
+  }, [stop, cancel, clearQueue]);
 
   const pauseSpeech = useCallback(() => {
     clearQueue(); // Clear pending items
@@ -199,16 +231,132 @@ export function useAgentTTS() {
     });
   }, [speak]);
 
+  // Interactive learning engagement
+  const interactionPrompts = [
+    "Are you following along? Feel free to ask me to slow down or explain anything in more detail.",
+    "Does this make sense so far? Let me know if you'd like me to go deeper into any part.",
+    "Are you getting the concept? I can break it down further or show more examples if helpful.",
+    "How are you feeling about this topic? Should we continue or would you like me to revisit something?",
+    "Is the pace working for you? I can speed up or slow down based on your preference.",
+    "Any questions about what we've covered? I'm here to help you understand completely.",
+    "Would you like me to show a different approach or continue with this explanation?"
+  ];
+
+  const scheduleInteractionPrompt = useCallback(() => {
+    // Clear existing timeout
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+    }
+
+    // DISABLED: Don't automatically generate interaction prompts
+    // Real teachers wait for students to ask questions, not constantly talk
+    console.log('🤐 Automatic interaction prompts disabled - teacher waiting for student input');
+  }, [isPlaying, speakStream, currentSpeed]);
+
+  const resetInteractionTimer = useCallback(() => {
+    lastInteractionRef.current = Date.now();
+    // No longer schedule prompts - teacher waits for student
+  }, []);
+
+  // Stop learning session completely
+  const stopLearningSession = useCallback(() => {
+    // Clear all timeouts
+    if (speakTimeoutRef.current) {
+      clearTimeout(speakTimeoutRef.current);
+      speakTimeoutRef.current = null;
+    }
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+      interactionTimeoutRef.current = null;
+    }
+    
+    // Stop all speech immediately
+    stop(); // Stop current audio playback
+    cancel(); // Cancel any requests
+    clearQueue(); // Clear the queue
+    
+    // Reset learning context
+    learningContextRef.current = {
+      elementsCreated: 0,
+      learningPhase: 'introduction'
+    };
+    
+    processingStreamRef.current = false;
+    lastSpokenRef.current = '';
+    
+    console.log('🛑 Learning session stopped completely');
+  }, [stop, cancel, clearQueue]);
+
+  // Mute learning session (keeps session active but silent)
+  const muteLearningSession = useCallback(() => {
+    mute();
+    // Clear interaction prompts while muted
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+      interactionTimeoutRef.current = null;
+    }
+    console.log('🔇 Learning session muted');
+  }, [mute]);
+
+  // Unmute and resume learning session
+  const unmuteLearningSession = useCallback(() => {
+    unmute();
+    // Resume interaction prompts
+    resetInteractionTimer();
+    console.log('🔊 Learning session unmuted and resumed');
+  }, [unmute, resetInteractionTimer]);
+
+  // Enhanced learning session with speed control
+  const startEnhancedLearningSession = useCallback((topic: string, preferredSpeed?: number) => {
+    if (preferredSpeed) {
+      setSpeed(preferredSpeed);
+    }
+    
+    learningContextRef.current = {
+      currentTopic: topic,
+      elementsCreated: 0,
+      learningPhase: 'introduction'
+    };
+    
+    // best-effort unlock
+    unlockAudio();
+
+    const introduction = `Hello! I'm your visual learning assistant. Today we'll explore ${topic} together at a pace that works for you. I'll create diagrams and explain each step so you can understand both the concepts and how to visualize them effectively. If you need me to slow down or speed up, just let me know!`;
+    
+    speak(introduction, {
+      voice: 'fable',
+      speed: currentSpeed,
+      autoPlay: true
+    });
+
+    // Start interaction prompts
+    resetInteractionTimer();
+  }, [speak, currentSpeed, unlockAudio, setSpeed, resetInteractionTimer]);
+
   return {
     speakAsLearningAssistant,
     speakEducationalResponse,
     streamEducationalResponse,
     startLearningSession,
+    startEnhancedLearningSession,
+    stopLearningSession,
+    muteLearningSession,
+    unmuteLearningSession,
     clearSpeech,
     pauseSpeech,
     testSpeak,
+    resetInteractionTimer,
     isPlaying,
     isLoading,
     queueLength,
+    isMuted,
+    mute,
+    unmute,
+    toggleMute,
+    currentSpeed,
+    setSpeed,
+    increaseSpeed,
+    decreaseSpeed,
+    resetSpeed,
   };
 }

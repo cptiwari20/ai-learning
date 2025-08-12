@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@auth/mongodb-adapter": "^3.10.0",
     "@excalidraw/excalidraw": "^0.18.0",
     "@langchain/core": "^0.3.66",
     "@langchain/langgraph": "^0.3.11",
@@ -16,8 +17,10 @@
     "@langchain/openai": "^0.6.3",
     "@langchain/pinecone": "^0.2.0",
     "@pinecone-database/pinecone": "^5.1.2",
+    "bcryptjs": "^3.0.2",
     "mongodb": "^6.18.0",
     "next": "15.4.4",
+    "next-auth": "^4.24.11",
     "openai": "^5.11.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",

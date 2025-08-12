@@ -143,9 +143,24 @@ export default function ConversationInterface({
           <div className="text-sm opacity-75">{getStatusText()}</div>
         </div>
 
-        {/* Activity indicators */}
+        {/* Activity indicators and TTS controls */}
         {conversation.isActive && (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            {/* TTS Mute Control */}
+            {conversation.isTTSMuted !== undefined && (
+              <button
+                onClick={conversation.toggleMuteTTS}
+                className={`p-1 rounded transition-colors ${
+                  conversation.isTTSMuted 
+                    ? 'bg-red-100 text-red-600 hover:bg-red-200' 
+                    : 'bg-green-100 text-green-600 hover:bg-green-200'
+                }`}
+                title={conversation.isTTSMuted ? 'Unmute TTS' : 'Mute TTS'}
+              >
+                <span className="text-sm">{conversation.isTTSMuted ? '🔇' : '🔊'}</span>
+              </button>
+            )}
+
             {conversation.ttsQueueLength > 0 && (
               <div className="flex items-center gap-1 text-sm">
                 <span>🎵</span>
